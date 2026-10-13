@@ -1,0 +1,21 @@
+/target/
+/dist/
+/learn-docs/
+/scripts/package.ps1
+/docs/
+
+# Local editor and agent settings
+/.idea/
+/.vscode/
+/.codex/
+
+# Temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# Cargo registry cache metadata (not part of vendored source)
+/vendor/eframe/.cargo-ok
+/vendor/eframe/.cargo_vcs_info.json
