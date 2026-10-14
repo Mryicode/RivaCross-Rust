@@ -583,7 +583,7 @@ mod tests {
         config.current.rtss_zoom = 1;
         config.current.shape = Shape::Ring;
         config.current.color = [255, 40, 160];
-        config.current.size = 27.;
+        config.current.gap = 27.;
         config.current.x = 11;
         let expected = config.current.clone();
         store.save(&config).unwrap();

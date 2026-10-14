@@ -67,19 +67,14 @@ impl Store {
         }
         let data = fs::read(&path)?;
         ensure!(data.len() <= 1024 * 1024, "配置文件过大");
-        let mut data: serde_json::Value =
-            serde_json::from_slice(&data).context("配置损坏；可重置当前设置后保存")?;
-        inherit_legacy_outline_opacity(&mut data);
         let mut c: Config =
-            serde_json::from_value(data).context("配置损坏；可重置当前设置后保存")?;
+            serde_json::from_slice(&data).context("配置损坏；可重置当前设置后保存")?;
         c.validate()?;
-        c.migrate_presets();
         c.remember_current();
         Ok(c)
     }
     pub fn save(&self, c: &Config) -> Result<()> {
         let mut c = c.clone();
-        c.migrate_presets();
         c.remember_current();
         c.validate()?;
         let tmp = self.root.join("config.json.tmp");
@@ -122,27 +117,6 @@ impl Store {
         Ok(name)
     }
 }
-// Old configs used one alpha for both fill and outline. Apply the inherited
-// value to every stored crosshair, including inactive presets and schemes.
-fn inherit_legacy_outline_opacity(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(object) => {
-            if object.contains_key("kind") && !object.contains_key("outline_opacity") {
-                let opacity = object.get("opacity").cloned().unwrap_or(255.into());
-                object.insert("outline_opacity".into(), opacity);
-            }
-            for child in object.values_mut() {
-                inherit_legacy_outline_opacity(child);
-            }
-        }
-        serde_json::Value::Array(array) => {
-            for child in array {
-                inherit_legacy_outline_opacity(child);
-            }
-        }
-        _ => {}
-    }
-}
 pub fn unique() -> String {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     format!(
@@ -182,60 +156,108 @@ mod tests {
         assert!(s.root.join("resources").join(name).exists());
     }
     #[test]
-    fn legacy_outline_opacity_inherits_alpha_in_presets_and_schemes() {
-        use crate::model::{Kind, Scheme, Shape};
-        let d = tempfile::tempdir().unwrap();
-        let store = Store::at(d.path().into()).unwrap();
-        let mut config = Config::default();
-        config.current.opacity = 70;
-        config.schemes.push(Scheme {
-            name: "legacy".into(),
-            crosshair: config.current.clone(),
-        });
-        config.switch_shape(Shape::Ring);
-        config.current.opacity = 120;
-        config.switch_kind(Kind::Text);
-        store.save(&config).unwrap();
-        let path = store.root.join("config.json");
-        let mut json: serde_json::Value =
-            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        fn strip(value: &mut serde_json::Value) {
-            match value {
-                serde_json::Value::Object(object) => {
-                    object.remove("outline_opacity");
-                    for child in object.values_mut() {
-                        strip(child);
-                    }
-                }
-                serde_json::Value::Array(array) => {
-                    for child in array {
-                        strip(child);
-                    }
-                }
-                _ => {}
-            }
-        }
-        strip(&mut json);
-        fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
-        let mut loaded = store.load().unwrap();
-        assert_eq!(loaded.schemes[0].crosshair.outline_opacity, 70);
-        loaded.switch_kind(Kind::Preset);
-        assert_eq!(loaded.current.outline_opacity, 120);
-        loaded.switch_shape(Shape::Cross);
-        assert_eq!(loaded.current.outline_opacity, 70);
-        loaded.current.outline_opacity = 180;
-        store.save(&loaded).unwrap();
-        assert_eq!(store.load().unwrap().current.outline_opacity, 180);
-    }
-    #[test]
     fn roundtrip_and_corruption() {
         let d = tempfile::tempdir().unwrap();
         let s = Store::at(d.path().to_owned()).unwrap();
         let c = Config::default();
         s.save(&c).unwrap();
-        assert_eq!(s.load().unwrap().current, c.current);
+        assert_eq!(s.load().unwrap(), c);
         fs::write(s.root.join("config.json"), b"broken").unwrap();
         assert!(s.load().is_err());
+    }
+    #[test]
+    fn incomplete_configs_are_rejected_without_filling_defaults() {
+        let d = tempfile::tempdir().unwrap();
+        let s = Store::at(d.path().into()).unwrap();
+        let complete = serde_json::to_value(Config::default()).unwrap();
+        for (pointer, field) in [
+            ("", "version"),
+            ("", "current"),
+            ("", "mode_settings"),
+            ("", "preset_settings"),
+            ("/current", "center_dot"),
+            ("/current", "t_shape"),
+            ("/current", "outline_color"),
+            ("/current", "outline_opacity"),
+            ("/mode_settings/text", "outline_opacity"),
+            ("/preset_settings/ring", "outline_opacity"),
+        ] {
+            let mut incomplete = complete.clone();
+            incomplete
+                .pointer_mut(pointer)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            fs::write(
+                s.root.join("config.json"),
+                serde_json::to_vec(&incomplete).unwrap(),
+            )
+            .unwrap();
+            assert!(s.load().is_err(), "{pointer}/{field}");
+        }
+        for field in ["mode_settings", "preset_settings"] {
+            let mut incomplete = complete.clone();
+            incomplete[field] = serde_json::Value::Null;
+            fs::write(
+                s.root.join("config.json"),
+                serde_json::to_vec(&incomplete).unwrap(),
+            )
+            .unwrap();
+            assert!(s.load().is_err(), "{field}");
+        }
+    }
+    #[test]
+    fn unsupported_versions_and_removed_shapes_are_rejected() {
+        let d = tempfile::tempdir().unwrap();
+        let s = Store::at(d.path().into()).unwrap();
+        let current = Config::default();
+        s.save(&current).unwrap();
+        for version in [1, 3] {
+            let mut unsupported = current.clone();
+            unsupported.version = version;
+            assert!(s.save(&unsupported).is_err());
+            assert_eq!(s.load().unwrap(), current);
+        }
+        let complete = serde_json::to_value(&current).unwrap();
+        for (pointer, value) in [
+            ("/version", serde_json::json!(1)),
+            ("/version", serde_json::json!(3)),
+            ("/current/shape", serde_json::json!("CrossDot")),
+        ] {
+            let mut unsupported = complete.clone();
+            *unsupported.pointer_mut(pointer).unwrap() = value;
+            fs::write(
+                s.root.join("config.json"),
+                serde_json::to_vec(&unsupported).unwrap(),
+            )
+            .unwrap();
+            assert!(s.load().is_err(), "{pointer}");
+        }
+    }
+    #[test]
+    fn independent_outline_opacity_survives_restart_in_presets_and_schemes() {
+        use crate::model::{Kind, Scheme, Shape};
+        let d = tempfile::tempdir().unwrap();
+        let s = Store::at(d.path().into()).unwrap();
+        let mut c = Config::default();
+        c.current.opacity = 70;
+        c.current.outline_opacity = 180;
+        c.schemes.push(Scheme {
+            name: "独立描边".into(),
+            crosshair: c.current.clone(),
+        });
+        c.switch_shape(Shape::Ring);
+        c.current.opacity = 120;
+        c.current.outline_opacity = 30;
+        c.switch_kind(Kind::Text);
+        s.save(&c).unwrap();
+        let mut loaded = s.load().unwrap();
+        assert_eq!(loaded, c);
+        loaded.switch_kind(Kind::Preset);
+        assert_eq!(loaded.current.outline_opacity, 30);
+        loaded.switch_shape(Shape::Cross);
+        assert_eq!(loaded.current.outline_opacity, 180);
     }
     #[test]
     fn independent_modes_survive_save_and_restart() {
@@ -309,138 +331,5 @@ mod tests {
             loaded.switch_shape(preset.shape);
             assert_eq!(loaded.current, preset);
         }
-    }
-    #[test]
-    fn old_config_seeds_only_the_last_preset_and_keeps_other_shapes_default() {
-        use crate::model::{Crosshair, Kind, Shape};
-        let d = tempfile::tempdir().unwrap();
-        let s = Store::at(d.path().into()).unwrap();
-        for active_kind in [Kind::Preset, Kind::Image] {
-            let mut c = Config::default();
-            c.current.shape = Shape::Quadrant;
-            c.current.length = 37.;
-            c.current.thickness = 7.;
-            c.current.outline_color = [120, 90, 60];
-            let quadrant = c.current.clone();
-            c.switch_kind(active_kind);
-            let mut old = serde_json::to_value(c).unwrap();
-            old.as_object_mut().unwrap().remove("preset_settings");
-            fs::write(
-                s.root.join("config.json"),
-                serde_json::to_vec(&old).unwrap(),
-            )
-            .unwrap();
-            let mut loaded = s.load().unwrap();
-            loaded.switch_kind(Kind::Preset);
-            assert_eq!(loaded.current, quadrant);
-            for shape in [Shape::Cross, Shape::Dot, Shape::Square, Shape::Ring] {
-                loaded.switch_shape(shape);
-                assert_eq!(
-                    loaded.current,
-                    Crosshair {
-                        shape,
-                        ..Default::default()
-                    }
-                );
-            }
-            loaded.switch_shape(Shape::Quadrant);
-            assert_eq!(loaded.current, quadrant);
-            s.save(&loaded).unwrap();
-            assert_eq!(s.load().unwrap().current, quadrant);
-        }
-    }
-    #[test]
-    fn legacy_config_preserves_shared_and_mode_specific_values() {
-        let d = tempfile::tempdir().unwrap();
-        let s = Store::at(d.path().into()).unwrap();
-        let mut c = Config::default();
-        c.current.kind = crate::model::Kind::Image;
-        c.current.opacity = 95;
-        c.current.x = 22;
-        c.current.image = Some("old.png".into());
-        c.current.image_scale = 2.;
-        c.current.text = "@".into();
-        c.current.text_size = 175;
-        let expected = c.current.clone();
-        let mut legacy = serde_json::to_value(&c).unwrap();
-        legacy.as_object_mut().unwrap().remove("mode_settings");
-        fs::write(
-            s.root.join("config.json"),
-            serde_json::to_vec(&legacy).unwrap(),
-        )
-        .unwrap();
-        let mut loaded = s.load().unwrap();
-        assert_eq!(loaded.current, expected);
-        loaded.switch_kind(crate::model::Kind::Text);
-        assert_eq!(loaded.current.text, "@");
-        assert_eq!(loaded.current.text_size, 175);
-        assert_eq!(loaded.current.opacity, 95);
-        loaded.current.x = -10;
-        loaded.switch_kind(crate::model::Kind::Image);
-        assert_eq!(loaded.current, expected);
-        s.save(&loaded).unwrap();
-        assert!(s.load().unwrap().mode_settings.is_some());
-    }
-    #[test]
-    fn legacy_presets_and_schemes_migrate_once_with_black_outline() {
-        use crate::model::{Crosshair, Scheme, Shape};
-        let d = tempfile::tempdir().unwrap();
-        let s = Store::at(d.path().into()).unwrap();
-        let mut c = Config {
-            version: 1,
-            ..Default::default()
-        };
-        c.current.shape = Shape::CrossDot;
-        c.mode_settings.as_mut().unwrap().preset.shape = Shape::Ring;
-        c.mode_settings.as_mut().unwrap().preset.size = 30.;
-        c.schemes.push(Scheme {
-            name: "旧点".into(),
-            crosshair: Crosshair {
-                shape: Shape::Dot,
-                size: 12.,
-                ..Default::default()
-            },
-        });
-        c.schemes.push(Scheme {
-            name: "旧圆环".into(),
-            crosshair: c.mode_settings.as_ref().unwrap().preset.clone(),
-        });
-        let mut value = serde_json::to_value(c).unwrap();
-        fn remove_new_fields(value: &mut serde_json::Value) {
-            match value {
-                serde_json::Value::Object(map) => {
-                    for field in ["center_dot", "t_shape", "outline_color"] {
-                        map.remove(field);
-                    }
-                    for child in map.values_mut() {
-                        remove_new_fields(child);
-                    }
-                }
-                serde_json::Value::Array(values) => {
-                    for child in values {
-                        remove_new_fields(child);
-                    }
-                }
-                _ => {}
-            }
-        }
-        remove_new_fields(&mut value);
-        fs::write(
-            s.root.join("config.json"),
-            serde_json::to_vec(&value).unwrap(),
-        )
-        .unwrap();
-        let loaded = s.load().unwrap();
-        assert_eq!(loaded.version, 2);
-        assert_eq!(loaded.current.shape, Shape::Cross);
-        assert!(loaded.current.center_dot);
-        assert!(!loaded.current.t_shape);
-        assert_eq!(loaded.current.outline_color, [0, 0, 0]);
-        assert_eq!(loaded.schemes[0].crosshair.thickness, 12.);
-        assert_eq!(loaded.schemes[1].crosshair.gap, 28.);
-        s.save(&loaded).unwrap();
-        let reloaded = s.load().unwrap();
-        assert_eq!(loaded.current, reloaded.current);
-        assert_eq!(loaded.schemes[1].crosshair, reloaded.schemes[1].crosshair);
     }
 }

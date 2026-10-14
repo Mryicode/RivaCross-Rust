@@ -9,7 +9,7 @@ pub fn preset(c: &Crosshair) -> Result<RgbaImage> {
         Shape::Dot => c.thickness / 2.,
         Shape::Ring | Shape::Square => c.gap / 2. + c.thickness,
         Shape::Quadrant => c.gap / 2. + c.length.max(c.thickness),
-        Shape::Cross | Shape::CrossDot => (c.gap / 2. + c.length).max(c.thickness / 2.),
+        Shape::Cross => (c.gap / 2. + c.length).max(c.thickness / 2.),
     };
     let n = ((extent + c.outline + 2.).ceil() as u32) * 2;
     let center = n as f32 / 2.;
@@ -71,7 +71,7 @@ pub fn preset(c: &Crosshair) -> Result<RgbaImage> {
                     }
                 }
             }
-            Shape::Cross | Shape::CrossDot => {
+            Shape::Cross => {
                 let half = c.thickness / 2. + extra;
                 let gap = c.gap / 2.;
                 let end = gap + c.length;
@@ -136,7 +136,7 @@ pub fn preset(c: &Crosshair) -> Result<RgbaImage> {
         }
         // Draw the dot in the same border/foreground pass, so overlaps do not
         // leave an outline seam or punch a hole through a ring.
-        if c.shape.has_center_dot() && (c.center_dot || c.shape == Shape::CrossDot) {
+        if c.shape.has_center_dot() && c.center_dot {
             let mut dot = sk::PathBuilder::new();
             push_rect(
                 &mut dot,
@@ -215,7 +215,6 @@ mod tests {
         for shape in [
             Shape::Dot,
             Shape::Cross,
-            Shape::CrossDot,
             Shape::Ring,
             Shape::Square,
             Shape::Quadrant,
@@ -237,7 +236,6 @@ mod tests {
         for shape in [
             Shape::Dot,
             Shape::Cross,
-            Shape::CrossDot,
             Shape::Square,
             Shape::Quadrant,
             Shape::Ring,
@@ -397,7 +395,6 @@ mod tests {
             if !shape.has_length() {
                 changed.length = 100.;
             }
-            changed.size = 120.;
             changed.t_shape = true;
             if shape == Shape::Dot {
                 changed.gap = 100.;
