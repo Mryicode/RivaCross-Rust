@@ -1,5 +1,7 @@
 # Repository Guidelines
 
+Use repository-root-relative paths in these guidelines. Keep machine-specific absolute paths and local agent configuration out of this file.
+
 ## Project Structure & Module Organization
 
 RivaCross Rust is a lightweight Windows x64 crosshair editor using Rust 2024, egui/eframe, and RTSS. The idea of displaying a customizable crosshair through RTSS was inspired by [irseny/RivaCross](https://github.com/irseny/RivaCross) ([releases](https://github.com/irseny/RivaCross/releases)). Keep this inspiration credit in both public READMEs. Use “inspired by” / “灵感来源” wording rather than describing that repository as the original project or upstream of this repository.

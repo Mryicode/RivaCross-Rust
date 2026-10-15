@@ -107,4 +107,6 @@ RTSS 运行时，可以用 `cargo run --locked -- --inspect` 只读检查 RivaCr
 - 狙击弩参考素材来自 Steam Crosshair 创意工坊 [Hunt:showdown_crossbow_sniper_steel&slug_16:10](https://steamcommunity.com/sharedfiles/filedetails/?id=3316676875)。内置版本是含 19 个独立可编辑路径的矢量重绘版。
 - 界面使用 egui/eframe，并包含本仓库已记录的事件循环补丁。
 
-依赖和素材分别遵循各自的版权与许可条款。
+## 许可证
+
+本项目自行编写的代码采用 [MIT License](LICENSE)。第三方依赖和素材分别遵循各自的版权与许可条款，不因本项目采用 MIT License 而改变。

@@ -107,4 +107,6 @@ See the [vendored eframe patch notes](vendor/README.md) for details of the hidde
 - The sniper-crossbow artwork is based on [Hunt:showdown_crossbow_sniper_steel&slug_16:10](https://steamcommunity.com/sharedfiles/filedetails/?id=3316676875) from the Steam Crosshair Workshop. The embedded version is a vector redraw with 19 editable paths.
 - The UI uses egui/eframe with the documented local event-loop patch.
 
-Dependencies and artwork retain their respective copyright and license terms.
+## License
+
+The project's own code is licensed under the [MIT License](LICENSE). Third-party dependencies and artwork retain their respective copyright and license terms; the MIT License does not relicense them.
