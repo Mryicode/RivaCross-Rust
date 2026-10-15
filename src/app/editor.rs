@@ -1,5 +1,5 @@
 use crate::{
-    model::{Config, Crosshair, Kind, Scheme, Shape},
+    model::{Config, Crosshair, HuntWeapon, Kind, Scheme, Shape},
     storage::Store,
 };
 use eframe::egui::{self, Color32};
@@ -22,9 +22,10 @@ pub fn controls(ui: &mut egui::Ui, config: &mut Config, store: &Store, error: &m
         ui.selectable_value(&mut kind, Kind::Preset, "预设");
         ui.selectable_value(&mut kind, Kind::Image, "图片");
         ui.selectable_value(&mut kind, Kind::Text, "字符");
+        ui.selectable_value(&mut kind, Kind::Hunt, "Hunt");
     });
     config.switch_kind(kind);
-    ui.small("三种模式分别保存设置，切换后恢复各自的参数。");
+    ui.small("四种模式分别保存设置，切换后恢复各自的参数。");
     ui.separator();
     if kind == Kind::Preset {
         let mut shape = config.current.shape;
@@ -41,6 +42,16 @@ pub fn controls(ui: &mut egui::Ui, config: &mut Config, store: &Store, error: &m
         });
         config.switch_shape(shape);
         ui.small("五种预设分别保存设置，切换后恢复各自的参数。");
+    }
+    if kind == Kind::Hunt {
+        let mut weapon = config.current.hunt_weapon;
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut weapon, HuntWeapon::Crossbow, "十字弩");
+            ui.selectable_value(&mut weapon, HuntWeapon::Bow, "弓");
+            ui.selectable_value(&mut weapon, HuntWeapon::SniperCrossbow, "狙击弩");
+        });
+        config.switch_weapon(weapon);
+        ui.small("三种武器分别保存缩放、透明度、偏移和 RTSS 补偿。");
     }
     let c = &mut config.current;
     match c.kind {
@@ -113,6 +124,14 @@ pub fn controls(ui: &mut egui::Ui, config: &mut Config, store: &Store, error: &m
                     .text("等比缩放"),
             );
         }
+        Kind::Hunt => {
+            ui.add(
+                egui::Slider::new(&mut c.image_scale, 0.01..=16.0)
+                    .logarithmic(true)
+                    .drag_value_speed(0.01)
+                    .text("等比缩放"),
+            );
+        }
         Kind::Text => {
             ui.label("单行英文和 ASCII 符号（不支持尖括号）");
             ui.text_edit_singleline(&mut c.text);
@@ -159,7 +178,7 @@ pub fn controls(ui: &mut egui::Ui, config: &mut Config, store: &Store, error: &m
     });
 }
 fn color_and_opacity(ui: &mut egui::Ui, c: &mut Crosshair) {
-    if c.kind != Kind::Image {
+    if matches!(c.kind, Kind::Preset | Kind::Text) {
         ui.horizontal(|ui| {
             ui.label("颜色");
             ui.color_edit_button_srgb(&mut c.color);
@@ -221,6 +240,8 @@ pub fn schemes(
     ui.horizontal(|ui| {
         let reset_label = if config.current.kind == Kind::Preset {
             "恢复当前预设默认设置"
+        } else if config.current.kind == Kind::Hunt {
+            "恢复当前武器默认设置"
         } else {
             "恢复当前模式默认设置"
         };

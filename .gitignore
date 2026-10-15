@@ -1,8 +1,22 @@
 /target/
 /dist/
 /learn-docs/
-/scripts/package.ps1
+/scripts/
 /docs/
+# Keep local artwork ignored except SVG inputs required by builds and tests.
+/assets/*
+!/assets/crossbow.svg
+!/assets/bow.svg
+!/assets/sniper-crossbow.svg
+!/assets/reference/
+/assets/reference/*
+!/assets/reference/sniper-crossbow-original.svg
+!/assets/screenshots/
+/assets/screenshots/*
+!/assets/screenshots/preset-cross.png
+!/assets/screenshots/preset-ring.png
+!/assets/screenshots/image-mode.png
+!/assets/screenshots/hunt-crossbow.png
 
 # Local editor and agent settings
 /.idea/

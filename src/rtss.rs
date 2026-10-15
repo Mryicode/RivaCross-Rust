@@ -155,7 +155,9 @@ impl Layout {
     fn parse(h: &[u32; 10], len: usize) -> Result<Self> {
         ensure!(h[0] == 0x52545353, "RTSS 未就绪或已经退出");
         ensure!(h[1] >> 16 == 2, "不支持此 RTSS 共享内存版本");
-        let (text, capacity) = if h[1] >= 0x20007 {
+        let (text, capacity) = if h[1] >= 0x20014 && h[5] as usize >= 512 + 4096 + 262144 + 32768 {
+            (512 + 4096 + 262144, 32768)
+        } else if h[1] >= 0x20007 {
             (512, 4096)
         } else {
             (0, 256)
@@ -324,8 +326,14 @@ impl Mapping {
                 if l.text != 0 {
                     ptr::write_volatile(self.base().add(offset), 0);
                 }
+                if l.text > 512 {
+                    ptr::write_volatile(self.base().add(offset + 512), 0);
+                }
                 // v2.20's additional buffer must not retain stale text.
-                if l.version >= 0x20014 && l.stride >= 512 + 4096 + 262144 + 32768 {
+                if l.text != 512 + 4096 + 262144
+                    && l.version >= 0x20014
+                    && l.stride >= 512 + 4096 + 262144 + 32768
+                {
                     ptr::write_volatile(self.base().add(offset + 512 + 4096 + 262144), 0);
                 }
                 for (j, b) in bytes.iter().chain(std::iter::once(&0)).enumerate() {
@@ -397,6 +405,29 @@ pub fn encode(text: &str) -> Result<Vec<u8>> {
 pub(crate) mod tests {
     use super::*;
     #[test]
+    fn additional_text_buffer_roundtrips_large_tags_and_preserves_other_owners() {
+        let stride = 512 + 4096 + 262144 + 32768;
+        let mut m = mock_with_stride(stride);
+        unsafe {
+            ptr::write_volatile(m.base().add(40 + stride + 256), b'A');
+            ptr::write_volatile(m.base().add(40 + stride), b'X');
+            let ours = 40 + 2 * stride;
+            ptr::write_volatile(m.base().add(ours), b'Y');
+            ptr::write_volatile(m.base().add(ours + 512), b'Z');
+            let data = vec![b'a'; 24000];
+            assert!(m.write(&data, false).unwrap());
+            assert_eq!(m.own_text().unwrap(), Some(data));
+            assert_eq!(ptr::read_volatile(m.base().add(ours)), 0);
+            assert_eq!(ptr::read_volatile(m.base().add(ours + 512)), 0);
+            assert!(m.write(&vec![b'b'; 32768], false).is_err());
+            assert_eq!(m.own_text().unwrap().unwrap().len(), 24000);
+            m.release().unwrap();
+            assert!(m.own_text().unwrap().is_none());
+            assert_eq!(ptr::read_volatile(m.base().add(40 + stride)), b'X');
+            assert_eq!(ptr::read_volatile(m.base().add(40 + stride + 256)), b'A');
+        }
+    }
+    #[test]
     fn dropping_client_mapping_preserves_shared_content() {
         let mut client = mock();
         client.write(b"retained", false).unwrap();
@@ -411,6 +442,9 @@ pub(crate) mod tests {
         assert_eq!(observer.own_text().unwrap(), Some(b"retained".to_vec()));
     }
     pub(crate) fn mock() -> Mapping {
+        mock_with_stride(4608)
+    }
+    fn mock_with_stride(stride: usize) -> Mapping {
         unsafe {
             use windows::{
                 Win32::{
@@ -419,7 +453,7 @@ pub(crate) mod tests {
                 },
                 core::PCWSTR,
             };
-            let len = 40 + 4608 * 3;
+            let len = 40 + stride * 3;
             let handle = CreateFileMappingW(
                 INVALID_HANDLE_VALUE,
                 None,
@@ -432,7 +466,9 @@ pub(crate) mod tests {
             let view = MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, len);
             assert!(!view.Value.is_null());
             let m = Mapping { handle, view, len };
-            for (i, v) in header().iter().enumerate() {
+            let mut h = header();
+            h[5] = stride as u32;
+            for (i, v) in h.iter().enumerate() {
                 ptr::write_volatile(m.base().add(i * 4).cast::<u32>(), *v);
             }
             m

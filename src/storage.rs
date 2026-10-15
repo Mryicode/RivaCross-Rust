@@ -67,8 +67,13 @@ impl Store {
         }
         let data = fs::read(&path)?;
         ensure!(data.len() <= 1024 * 1024, "配置文件过大");
+        let value: serde_json::Value = serde_json::from_slice(&data).context("配置损坏")?;
+        ensure!(
+            value.get("version").and_then(|v| v.as_u64()) == Some(3),
+            "不支持此配置版本；需要版本 3，请重置或手动处理旧配置"
+        );
         let mut c: Config =
-            serde_json::from_slice(&data).context("配置损坏；可重置当前设置后保存")?;
+            serde_json::from_value(value).context("配置损坏；可重置当前设置后保存")?;
         c.validate()?;
         c.remember_current();
         Ok(c)
@@ -134,6 +139,84 @@ pub fn unique() -> String {
 mod tests {
     use super::*;
     #[test]
+    fn existing_v3_adds_only_sniper_defaults_and_preserves_all_saved_parameters() {
+        use crate::model::{HuntWeapon, Kind, Scheme};
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::at(d.path().into()).unwrap();
+        let mut c = Config::default();
+        c.switch_kind(Kind::Hunt);
+        c.current.image_scale = 1.57;
+        c.current.x = 12;
+        c.switch_weapon(HuntWeapon::Bow);
+        c.current.image_scale = 2.20;
+        c.current.opacity = 128;
+        c.remember_current();
+        let mut old = serde_json::to_value(&c).unwrap();
+        old["hunt_settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("sniper_crossbow");
+        fs::write(
+            store.root.join("config.json"),
+            serde_json::to_vec(&old).unwrap(),
+        )
+        .unwrap();
+        let mut loaded = store.load().unwrap();
+        assert_eq!(loaded, c);
+        loaded.switch_weapon(HuntWeapon::SniperCrossbow);
+        assert_eq!(loaded.current.image_scale, 1.);
+        loaded.current.image_scale = 2.20;
+        loaded.current.opacity = 128;
+        loaded.current.x = -20;
+        loaded.current.rtss_zoom = 4;
+        let sniper = loaded.current.clone();
+        loaded.schemes.push(Scheme {
+            name: "狙击弩".into(),
+            crosshair: sniper.clone(),
+        });
+        loaded.switch_kind(Kind::Preset);
+        store.save(&loaded).unwrap();
+        let mut restarted = store.load().unwrap();
+        restarted.switch_kind(Kind::Hunt);
+        assert_eq!(restarted.current, sniper);
+        restarted.reset_current();
+        restarted.apply_crosshair(restarted.schemes[0].crosshair.clone());
+        assert_eq!(restarted.current, sniper);
+    }
+    #[test]
+    fn hunt_weapons_and_schemes_survive_restart_from_another_mode() {
+        use crate::model::{HuntWeapon, Kind, Scheme};
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::at(d.path().into()).unwrap();
+        let mut c = Config::default();
+        c.switch_kind(Kind::Hunt);
+        c.current.image_scale = 1.57;
+        c.current.opacity = 128;
+        c.current.x = -14;
+        c.current.y = 9;
+        c.current.rtss_zoom = 3;
+        let crossbow = c.current.clone();
+        c.switch_weapon(HuntWeapon::Bow);
+        c.current.image_scale = 2.20;
+        c.current.opacity = 200;
+        c.current.rtss_zoom = 4;
+        let bow = c.current.clone();
+        c.schemes.push(Scheme {
+            name: "弓".into(),
+            crosshair: bow.clone(),
+        });
+        c.switch_kind(Kind::Text);
+        store.save(&c).unwrap();
+        let mut loaded = store.load().unwrap();
+        assert_eq!(loaded, c);
+        loaded.switch_kind(Kind::Hunt);
+        assert_eq!(loaded.current, bow);
+        loaded.switch_weapon(HuntWeapon::Crossbow);
+        assert_eq!(loaded.current, crossbow);
+        loaded.apply_crosshair(loaded.schemes[0].crosshair.clone());
+        assert_eq!(loaded.current, bow);
+    }
+    #[test]
     fn cache_retains_latest_for_reconnection() {
         let d = tempfile::tempdir().unwrap();
         let s = Store::at(d.path().into()).unwrap();
@@ -175,6 +258,11 @@ mod tests {
             ("", "current"),
             ("", "mode_settings"),
             ("", "preset_settings"),
+            ("", "hunt_settings"),
+            ("/mode_settings", "hunt"),
+            ("/current", "hunt_weapon"),
+            ("/hunt_settings", "bow"),
+            ("/hunt_settings/crossbow", "opacity"),
             ("/current", "center_dot"),
             ("/current", "t_shape"),
             ("/current", "outline_color"),
@@ -213,7 +301,7 @@ mod tests {
         let s = Store::at(d.path().into()).unwrap();
         let current = Config::default();
         s.save(&current).unwrap();
-        for version in [1, 3] {
+        for version in [1, 2, 4] {
             let mut unsupported = current.clone();
             unsupported.version = version;
             assert!(s.save(&unsupported).is_err());
@@ -222,7 +310,9 @@ mod tests {
         let complete = serde_json::to_value(&current).unwrap();
         for (pointer, value) in [
             ("/version", serde_json::json!(1)),
-            ("/version", serde_json::json!(3)),
+            ("/version", serde_json::json!(2)),
+            ("/version", serde_json::json!(4)),
+            ("/current/hunt_weapon", serde_json::json!("Sniper")),
             ("/current/shape", serde_json::json!("CrossDot")),
         ] {
             let mut unsupported = complete.clone();

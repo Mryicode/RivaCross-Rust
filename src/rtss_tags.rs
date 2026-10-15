@@ -17,24 +17,95 @@ pub fn tags(c: &Crosshair, zoom: u32, image: Option<(&str, u32, u32)>) -> Result
     }
     let (path, width, height) = image.context("缺少输出图片")?;
     ensure!(
-        width > 0 && height > 0 && width.is_multiple_of(zoom) && height.is_multiple_of(zoom),
+        width > 0
+            && height > 0
+            && width.is_multiple_of(2 * zoom)
+            && height.is_multiple_of(2 * zoom),
         "图片尺寸与倍率不匹配"
     );
     ensure!(!path.contains(['"', '<', '>']), "缓存路径含 RTSS 保留字符");
-    Ok(format!(
-        "<LI=\"{path}\"><P4><L0><S=100><E={},{},4>{margin}<C=FFFFFFFF><I={},{},0,0,{},{}><C><S>",
-        width / zoom,
-        height / zoom,
-        width / zoom,
-        height / zoom,
-        width,
-        height
-    ))
+    // Sticky positioning clamps each layer's natural extent to the client.
+    // Keep that extent bounded, and place native-pixel source tiles relative
+    // to the screen center. S=1 prevents font line height from enlarging tiles.
+    let tile = 128 / (2 * zoom) * (2 * zoom);
+    let mut result = format!("<LI=\"{path}\"><S=1><C=FFFFFFFF>");
+    let mut layer = 0;
+    for sy in (0..height).step_by(tile as usize) {
+        let h = tile.min(height - sy);
+        for sx in (0..width).step_by(tile as usize) {
+            let w = tile.min(width - sx);
+            let dx = c.x + (sx as i32 + w as i32 / 2 - width as i32 / 2) / zoom as i32;
+            let dy = c.y + (sy as i32 + h as i32 / 2 - height as i32 / 2) / zoom as i32;
+            use std::fmt::Write;
+            write!(
+                result,
+                "<P4><L{layer}><E={},{},4><M={dx},{dy},0,0><I={},{},{sx},{sy},{w},{h}>",
+                w / zoom,
+                h / zoom,
+                w / zoom,
+                h / zoom
+            )?;
+            layer += 1;
+        }
+    }
+    result.push_str("<C><S>");
+    Ok(result)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tiled_output_covers_every_pixel_once_with_native_scale_and_bounded_layers() {
+        for zoom in [1, 2, 3, 4, 16] {
+            for (width, height) in [(256_u32, 256_u32), (996, 996), (4096, 1024), (1024, 4096)] {
+                let q = 2 * zoom;
+                let (width, height) = (width.div_ceil(q) * q, height.div_ceil(q) * q);
+                let c = Crosshair {
+                    x: 12,
+                    y: -6,
+                    ..Default::default()
+                };
+                let t = tags(&c, zoom, Some(("C:/cache.png", width, height))).unwrap();
+                assert!(t.len() < 32768);
+                let mut coverage = vec![0u8; (width * height) as usize];
+                for layer in t.split("<P4>").skip(1) {
+                    let params = |prefix| -> Vec<i32> {
+                        layer
+                            .split(prefix)
+                            .nth(1)
+                            .unwrap()
+                            .split('>')
+                            .next()
+                            .unwrap()
+                            .split(',')
+                            .map(|p| p.parse().unwrap())
+                            .collect()
+                    };
+                    let m = params("<M=");
+                    let i = params("<I=");
+                    let (dw, dh, sx, sy, w, h) = (i[0], i[1], i[2], i[3], i[4], i[5]);
+                    assert_eq!(dw * zoom as i32, w);
+                    assert_eq!(dh * zoom as i32, h);
+                    assert!(w <= 128 && h <= 128);
+                    assert_eq!(
+                        m[0] * zoom as i32 - w / 2,
+                        c.x * zoom as i32 + sx - width as i32 / 2
+                    );
+                    assert_eq!(
+                        m[1] * zoom as i32 - h / 2,
+                        c.y * zoom as i32 + sy - height as i32 / 2
+                    );
+                    for y in sy..sy + h {
+                        for x in sx..sx + w {
+                            coverage[(y as u32 * width + x as u32) as usize] += 1;
+                        }
+                    }
+                }
+                assert!(coverage.iter().all(|&n| n == 1));
+            }
+        }
+    }
     #[test]
     fn explicit_zoom_and_path_generate_compensated_tags_without_io() {
         let c = Crosshair {
@@ -44,9 +115,14 @@ mod tests {
         };
         for zoom in [1, 2, 4, 16] {
             let t = tags(&c, zoom, Some(("C:/cache with spaces/cross.png", 256, 256))).unwrap();
-            let extent = 256 / zoom;
-            assert!(t.contains(&format!("<I={extent},{extent},0,0,256,256>")));
-            assert!(t.contains("<M=12,-6,0,0>"));
+            let tile = 128 / (2 * zoom) * (2 * zoom);
+            let extent = tile / zoom;
+            assert!(t.contains(&format!("<I={extent},{extent},0,0,{tile},{tile}>")));
+            assert!(t.contains(&format!(
+                "<M={},{},0,0>",
+                12 + (tile as i32 / 2 - 128) / zoom as i32,
+                -6 + (tile as i32 / 2 - 128) / zoom as i32
+            )));
             assert!(!t.contains("FNT"));
         }
     }

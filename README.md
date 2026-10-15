@@ -1,86 +1,110 @@
 # RivaCross Rust
 
-Windows x64 独立准星编辑器，通过 RTSS 7.3.7 显示叠加内容。无需 OverlayEditor 插件，不修改 RTSS 配置。可执行文件为 `dist/RivaCross.exe`。
+[English](README.md) | [简体中文](README_zh.md)
 
-## 使用
+A lightweight crosshair editor for Windows x64, built with Rust and egui/eframe. It displays custom crosshairs through RivaTuner Statistics Server (RTSS).
 
-1. 启动 RTSS，启用 On-Screen Display，选择 **Raster3D** 渲染模式。
-2. 启动 RivaCross，选择预设、图片或字符并调整参数。
-3. 默认 `Ctrl+Alt+F9` 显示／隐藏准星，可在界面修改。热键冲突会提示重新设置。
-4. 关闭窗口收起到托盘，准星继续显示。**左键双击**托盘图标打开界面；**右键**显示菜单。菜单可打开界面、切换显隐、锁定／解锁或选择退出方式。
-5. **锁定准星**会等待当前内容提交完成，然后暂停后台连接检查、倍率查询和缓存清理，禁止编辑与显隐热键；锁定后工作线程等待操作事件，界面不再固定频率刷新。**解锁准星**重新检查 RTSS 并恢复编辑。锁定期间 RTSS 重启、槽位重置或倍率变化，需要解锁后恢复。锁定状态不跨程序启动保存。
-6. **保留准星并退出**会保存配置、确认最新内容写入后退出，保留 RTSS 槽位和图片缓存；写入失败会提示并保持程序运行。准星若处于隐藏状态，退出后仍隐藏。退出后显隐热键失效，RTSS 重启或系统重启后需要重新启动 RivaCross 提交。**清除准星并退出**释放自有槽位；界面中的 `Ctrl+Q` 使用此方式。重复启动会打开已有窗口。
+The initial release is **0.1.0**.
 
-预设、图片、字符各自保存完整设置，包括颜色（预设／字符）、透明度、水平／垂直偏移和 RTSS 缩放补偿，以及各模式的尺寸、内容等参数。切换模式或重启后恢复各自设置；使用方案只替换方案对应模式的设置，恢复默认只重置当前模式。显隐、热键仍是全局设置。
+Inspired by [irseny/RivaCross](https://github.com/irseny/RivaCross) ([releases](https://github.com/irseny/RivaCross/releases)) and its use of RTSS to display a crosshair. This project brings that idea to a graphical Rust editor with a focus on low background resource use.
 
-五种预设也分别保存完整设置，包括尺寸、中心点／T 型、颜色、描边、透明度、偏移和 RTSS 缩放补偿，切换预设或重启后恢复各自参数。应用预设方案只更新对应形状；恢复默认只重置当前选中的预设。
+## Built to stay lightweight
 
-预设包括静态十字、仅中心点、静态方形、静态四分和圆形。尺寸按像素调整，只显示当前预设支持的参数：
+- Run a single EXE without an installer or OverlayEditor plugin. Hunt SVG assets are embedded in the executable. RTSS runs separately.
+- The native Rust and egui/eframe UI uses the Glow renderer and enables only selected dependency features.
+- The UI repaints in response to events. A local eframe patch prevents continuous polling while the window is hidden.
+- Locking waits for pending output, then suspends connection checks, zoom queries and cache cleanup. The worker waits for commands.
+- You can keep the crosshair displayed and exit the editor. RTSS must stay running, and the image cache must remain available.
+- Release builds use thin LTO and strip symbols. Executable size and resource use depend on the build and workload.
 
-| 预设 | 尺寸 | 形状 |
-| --- | --- | --- |
-| 静态十字 | 长度、粗细、间距 | 中心点、T 型 |
-| 仅中心点 | 粗细 | — |
-| 静态方形 | 粗细、间距 | 中心点 |
-| 静态四分 | 长度、粗细、间距 | 中心点 |
-| 圆形 | 粗细、间距 | 中心点 |
+## Features
 
-T 型去掉十字顶部线条；中心点为实心方点，边长跟随粗细。静态方形是完整方框，静态四分是四个分开的直角，长度控制每个直角两条边的伸展；长度不超过粗细时缩成方块。间距表示中央留空的宽度；圆形是完整圆环，间距表示内部留空直径，不提供长度参数。所有预设都可修改描边粗细和描边颜色，描边粗细为 0 时关闭描边。
+| Mode | What you can customize |
+| --- | --- |
+| Preset | Cross, dot, square, corner brackets and ring; supported size controls, center dot, cross-only T shape, colors and independent outline opacity |
+| Image | Static PNG/SVG, transparency and proportional scaling; SVG is rerendered at the target size |
+| Text | Printable ASCII rendered directly by RTSS, with color, opacity and size controls |
+| Hunt | Built-in crossbow, bow and sniper-crossbow artwork, with weapon instructions and source credits |
 
-图片支持静态 PNG/SVG、透明背景、等比缩放和透明度；SVG 按目标尺寸重新渲染。PNG 放大采用最近邻采样，保留像素边缘；小尺寸 PNG 不会凭空产生细节。
+The four modes, five preset shapes and three Hunt: Showdown 1896 weapons each remember their settings. You can save up to 100 named schemes. Applying a scheme or resetting defaults affects only the corresponding mode, shape or weapon. Visibility and the configurable global hotkey apply across all modes.
 
-字符使用 RTSS 直接文本，支持可打印 ASCII，禁止换行、尖括号、中文和 Emoji。预览仅供参考。很大的字符缩放仍受 RTSS 字体纹理分辨率限制；本应用不使用会改变其他 OSD 字体的 `<FNT>` 标签。
+Image and Hunt crosshairs keep the original canvas center when transparent borders are removed. RTSS output is split into tiles so large canvases stay centered when they extend beyond the target window. The preview shows actual size or 4× magnification.
 
-图片按原生像素提交：自动只读检测 RTSS 全局倍率，补偿 `<I>` 的目标尺寸，避免全局 OSD 放大再次放大纹理。**RTSS 缩放补偿 = 0** 表示自动；若目标程序使用独立 RTSS 配置，请手动填写该程序的 OSD 倍率。无法读取时按 1 倍处理，可手动修正。偏移遵循 RTSS 的布局单位，外观还受目标程序的 OSD 设置影响。
+## Screenshots
 
-## 配置和资源
+The editor UI is currently in Chinese. These screenshots show editor previews with RTSS disconnected.
 
-保存在 `%LOCALAPPDATA%\RivaCross`：
+| Cross preset | Ring preset |
+| --- | --- |
+| [![Cross preset editor](assets/screenshots/preset-cross.png)](assets/screenshots/preset-cross.png) | [![Ring preset editor](assets/screenshots/preset-ring.png)](assets/screenshots/preset-ring.png) |
 
-- `config.json`：版本 2 配置、当前准星、三种模式与五种预设的独立设置、显隐、热键和用户方案；停止调整约 0.5 秒后自动保存，采用原子替换。
-- `resources/`：导入的源图片，原文件移动或删除后仍可使用。
-- `cache/`：独立文件名的显示 PNG；旧缓存自动清理，保留最新图片用于重连。
-- `last-exit-error.txt`：只有退出时 RTSS 持续锁忙、无法释放槽位时写入。
+| Imported image | Hunt crossbow |
+| --- | --- |
+| [![Image import and preview](assets/screenshots/image-mode.png)](assets/screenshots/image-mode.png) | [![Hunt crossbow preview and instructions](assets/screenshots/hunt-crossbow.png)](assets/screenshots/hunt-crossbow.png) |
 
-导入限制为 32 MiB、边长不超过 4096、目标像素最多约 4 百万。动画 PNG/SVG 和含外部资源的 SVG 会被拒绝；SVG 需要自包含。首次运行没有配置文件时创建默认设置；现有配置必须包含完整字段，不再迁移开发期间的旧配置或旧方案。配置损坏或图片缺失会提示，可继续编辑、恢复默认或重新导入。用户方案最多 100 个，同名保存覆盖原方案。
+## Quick start
 
-## 构建
+1. Start RTSS, enable **On-Screen Display**, and select **Raster3D** rendering. This project was developed with RTSS 7.3.7.
+2. Run `RivaCross.exe` from a release package, or build it using the instructions below. The current editor UI is in Chinese.
+3. Select a mode and adjust the crosshair. Changes are saved automatically about 0.5 seconds after editing stops.
+4. Press **Ctrl+Alt+F9** to toggle visibility. Change the hotkey in the editor if it conflicts with another application.
+5. Close the window to minimize to the tray. Double-click the tray icon to reopen; right-click for visibility, lock and exit commands.
 
-需要 Rust MSVC x64 工具链、MSVC 链接器和 Windows SDK。已在 Rust 1.99.0 上构建。依赖版本锁定在 `Cargo.lock`。
+Use **Lock crosshair / 锁定准星** when you have finished adjusting the crosshair. It waits for pending output, then disables editing and the visibility hotkey. If RTSS restarts, resets the overlay slot or changes zoom while locked, unlock to reconnect. The editor starts unlocked on each launch.
+
+| Exit command | Result |
+| --- | --- |
+| Keep crosshair and exit / 保留准星并退出 | Saves configuration and confirms the latest output before ending the editor. Keeps the owned slot and image cache; failed submission keeps the editor open. Hidden output stays hidden. |
+| Clear crosshair and exit / 清除准星并退出 | Releases the owned RTSS slot and exits. Also available through Ctrl+Q in the editor. |
+
+The hotkey works only while the editor is running. After RTSS or Windows restarts, launch RivaCross again to restore a retained crosshair. Launching a second instance opens the existing editor.
+
+## Scaling and limits
+
+- Set **RTSS zoom compensation = 0** to read the global OSD zoom automatically, with a fallback of 1× if the query fails. If the target application uses a separate RTSS profile, enter its zoom manually. RivaCross does not change RTSS configuration.
+- PNG enlargement uses nearest-neighbor sampling. SVG scales from its source geometry. Text preview may differ from RTSS; large text remains limited by RTSS font texture quality.
+- Import static, self-contained PNG/SVG files up to 32 MiB. Decoded images can be at most 4096 pixels per edge and 4,194,304 pixels in total. Animated files and SVGs with external resources are rejected. Transparent SVG margins may be cropped before allocating pixels; visible content must still fit these limits.
+- Hunt scale ranges from 0.01 to 16.00, within the image limits. The artwork keeps its colors and alpha; the opacity control multiplies the source alpha. The sniper-crossbow artwork is designed for **16:10**. **16:9 has not been calibrated**.
+- Text accepts 1 to 128 printable ASCII characters, excluding `<` and `>`. Chinese, emoji and line breaks are unsupported in text crosshairs.
+- Display support depends on RTSS and the target application. Compatibility with specific games and resolutions still needs testing. RivaCross has no automatic per-game switching or startup registration.
+
+## Configuration
+
+RivaCross stores its data in `%LOCALAPPDATA%\RivaCross`. You can open this folder from the editor or tray menu, even while the crosshair is locked.
+
+| Path | Purpose |
+| --- | --- |
+| `config.json` | Version 3 settings, independent mode/shape/weapon parameters, visibility, hotkey and schemes; saved using atomic replacement |
+| `resources/` | Imported source images, retained even if the original is moved |
+| `cache/` | Generated PNG textures; cleanup preserves the latest image for reconnection and retained output |
+| `last-exit-error.txt` | Diagnostic written when RTSS slot cleanup repeatedly fails during exit |
+
+If no configuration file exists, RivaCross starts with default settings. The `version: 3` value in `config.json` identifies the internal configuration format, separate from the application version. The editor reports invalid configuration. To reset settings, exit the editor, back up and move `config.json` aside, then restart.
+
+## Build and validate
+
+Building requires Windows, a Rust MSVC x64 toolchain, MSVC Build Tools and the Windows SDK. Use the dependency versions in `Cargo.lock`.
 
 ```powershell
+cargo run --locked
+cargo fmt --all -- --check
 cargo test --locked
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo build --release --locked
 ```
 
-输出 `target/release/rivacross.exe`，可直接复制为 `RivaCross.exe`。首次构建需要下载依赖；下载完成后可加 `--offline`。本工程没有安装器、DLL 插件、按游戏切换或开机启动功能。
+The release executable is `target/release/rivacross.exe`; it can be renamed to `RivaCross.exe`. Keep the development-only `ui-capture` feature disabled in release builds.
 
-`vendor/eframe` 包含 eframe 0.31.1 的本地补丁，修复 Windows 隐藏窗口后的事件循环空转；补丁说明见 `vendor/README.md`。关闭到托盘不会解除锁定或恢复默认准星。
+With RTSS running, use `cargo run --locked -- --inspect` to inspect RivaCross's overlay slot or `cargo run --locked -- --query-zoom` to read global scaling. Exit the editor before running `cargo run --locked -- --probe`, which submits sample overlays and releases its slot. Ignored UI and live RTSS tests need a separate test setup.
 
-## 开发验证
+See the [vendored eframe patch notes](vendor/README.md) for details of the hidden-window event-loop fix.
 
-```powershell
-cargo run -- --probe
-cargo run -- --query-zoom
-cargo run -- --inspect
-```
+## Inspiration and credits
 
-`--probe` 依次提交透明图片、直接文本和偏移图片，正常结束释放槽位；需要先退出编辑器，避免单实例机制将请求转为打开窗口。`--query-zoom` 只读查询 RTSS SDK 的全局倍率；`--inspect` 只读报告本工具槽位的 `visible`、`hidden` 或 `released` 状态。
+- [irseny/RivaCross](https://github.com/irseny/RivaCross) ([releases](https://github.com/irseny/RivaCross/releases)) inspired the idea of displaying a customizable crosshair through RTSS. Thanks to Irseny.
+- RivaTuner Statistics Server and its SDK provide the overlay platform.
+- The crossbow and bow artwork comes from bilibili @Zuko819470293, credited in the editor.
+- The sniper-crossbow artwork is based on [Hunt:showdown_crossbow_sniper_steel&slug_16:10](https://steamcommunity.com/sharedfiles/filedetails/?id=3316676875) from the Steam Crosshair Workshop. The embedded version is a vector redraw with 19 editable paths.
+- The UI uses egui/eframe with the documented local event-loop patch.
 
-界面截图功能仅在开发 feature 下启用：
-
-```powershell
-cargo build --features ui-capture
-$env:EFRAME_SCREENSHOT_TO = "$PWD\target\ui.png"
-# 可选：使用隔离的配置和测试图片目录
-$env:RIVACROSS_TEST_DATA_DIR = "$PWD\target\qa"
-.\target\debug\rivacross.exe
-Remove-Item Env:EFRAME_SCREENSHOT_TO, Env:RIVACROSS_TEST_DATA_DIR
-```
-
-eframe 的截图路径会直接结束进程，跳过正常析构；截图测试后运行 `--probe` 清理测试槽位。交付版本不启用此 feature。
-
-验证结果和未覆盖项目见 [验收记录](docs/verification.md)。
-
-模块职责调整、实施顺序和回归要求见 [结构重构方案](docs/refactoring.md)。
+Dependencies and artwork retain their respective copyright and license terms.

@@ -190,14 +190,30 @@ pub(crate) fn opacity(img: &mut RgbaImage, alpha: u8) {
         p[3] = (u16::from(p[3]) * u16::from(alpha) / 255) as u8;
     }
 }
+/// Remove only matching transparent rows/columns on opposite sides. The
+/// original canvas center (including half-pixel centers) remains the anchor.
+pub fn crop_centered(img: &RgbaImage) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let mut trim_x = w / 2;
+    let mut trim_y = h / 2;
+    for (x, y, p) in img.enumerate_pixels() {
+        if p[3] != 0 {
+            trim_x = trim_x.min(x).min(w - 1 - x);
+            trim_y = trim_y.min(y).min(h - 1 - y);
+        }
+    }
+    // Keep a transparent guard pixel, including antialiased alpha=1 pixels.
+    trim_x = trim_x.saturating_sub(1);
+    trim_y = trim_y.saturating_sub(1);
+    image::imageops::crop_imm(img, trim_x, trim_y, w - 2 * trim_x, h - 2 * trim_y).to_image()
+}
 pub fn texture(img: &RgbaImage, zoom: u32) -> Result<RgbaImage> {
     anyhow::ensure!((1..=16).contains(&zoom), "倍率无效");
-    // RTSS <I> dimensions use zoomed pixels, independently of <S>. Pad to a
-    // multiple of the host zoom and divide only the destination extent so the
-    // source texture is sampled 1:1. Transparent padding also keeps font line
-    // height from displacing small images above the center anchor.
-    let width = img.width().max(256).div_ceil(zoom) * zoom;
-    let height = img.height().max(256).div_ceil(zoom) * zoom;
+    // A 2*zoom multiple gives an integral half-extent in RTSS layout units.
+    // Odd source sizes retain a half-pixel anchor, with at most 0.5 px error.
+    let quantum = 2 * zoom;
+    let width = img.width().max(256).div_ceil(quantum) * quantum;
+    let height = img.height().max(256).div_ceil(quantum) * quantum;
     let mut texture = RgbaImage::new(width, height);
     image::imageops::overlay(
         &mut texture,
@@ -210,6 +226,36 @@ pub fn texture(img: &RgbaImage, zoom: u32) -> Result<RgbaImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn symmetric_crop_keeps_asymmetric_art_and_faint_edge_at_original_anchor() {
+        let mut img = RgbaImage::new(101, 103);
+        img.put_pixel(50, 51, image::Rgba([255, 255, 255, 255]));
+        img.put_pixel(40, 90, image::Rgba([255, 0, 0, 1]));
+        let cropped = crop_centered(&img);
+        assert_eq!(cropped.dimensions(), (23, 81));
+        assert_eq!(cropped.get_pixel(11, 40)[3], 255);
+        assert_eq!(cropped.get_pixel(1, 79)[3], 1);
+        for zoom in [1, 2, 3, 4, 16] {
+            let texture = texture(&cropped, zoom).unwrap();
+            let (w, h) = texture.dimensions();
+            assert!(w.is_multiple_of(2 * zoom) && h.is_multiple_of(2 * zoom));
+            assert_eq!(texture.get_pixel(w / 2 - 1, h / 2 - 1)[3], 255);
+        }
+    }
+    #[test]
+    fn texture_padding_keeps_even_canvas_anchor_exact_for_large_and_small_images() {
+        for size in [2, 254, 256, 258, 452, 710, 994, 1200] {
+            let mut img = RgbaImage::new(size, size);
+            img.put_pixel(size / 2, size / 2, image::Rgba([255; 4]));
+            for zoom in [1, 2, 3, 4] {
+                let texture = texture(&img, zoom).unwrap();
+                assert_eq!(
+                    texture.get_pixel(texture.width() / 2, texture.height() / 2)[3],
+                    255
+                );
+            }
+        }
+    }
     #[test]
     fn shapes_have_transparency_and_alpha() {
         for shape in [

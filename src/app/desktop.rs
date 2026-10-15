@@ -7,6 +7,7 @@ use tray_icon::{
 pub(super) struct Desktop {
     pub(super) _tray: Option<TrayIcon>,
     pub(super) open_item: MenuItem,
+    pub(super) config_directory_item: MenuItem,
     pub(super) toggle_item: MenuItem,
     pub(super) exit_item: MenuItem,
     pub(super) keep_exit_item: MenuItem,
@@ -18,6 +19,7 @@ impl Desktop {
     pub fn new() -> (Self, Option<String>) {
         let menu = Menu::new();
         let open_item = MenuItem::new("打开界面", true, None);
+        let config_directory_item = MenuItem::new("打开配置文件目录", true, None);
         let toggle_item = MenuItem::new("显示／隐藏准星", true, None);
         let exit_item = MenuItem::new("清除准星并退出", true, None);
         let keep_exit_item = MenuItem::new("保留准星并退出", true, None);
@@ -25,6 +27,7 @@ impl Desktop {
         let tray_result = (|| -> anyhow::Result<TrayIcon> {
             menu.append_items(&[
                 &open_item,
+                &config_directory_item,
                 &toggle_item,
                 &lock_item,
                 &keep_exit_item,
@@ -51,6 +54,7 @@ impl Desktop {
             Self {
                 _tray: tray,
                 open_item,
+                config_directory_item,
                 toggle_item,
                 exit_item,
                 keep_exit_item,
@@ -81,4 +85,32 @@ impl Desktop {
         self.hotkey = Some(key);
         Ok(())
     }
+}
+
+pub(super) fn open_directory(path: &std::path::Path) -> anyhow::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::{
+        Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
+        core::{PCWSTR, w},
+    };
+
+    let directory: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // ShellExecuteW opens the directory using Explorer and reports failures as values <= 32.
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            PCWSTR(directory.as_ptr()),
+            None,
+            None,
+            SW_SHOWNORMAL,
+        )
+    };
+    anyhow::ensure!(
+        result.0 as isize > 32,
+        "无法打开配置文件目录 {}（系统错误代码：{}）",
+        path.display(),
+        result.0 as isize
+    );
+    Ok(())
 }

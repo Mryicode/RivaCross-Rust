@@ -1,5 +1,6 @@
 mod desktop;
 mod editor;
+mod hunt_help;
 mod preview;
 use crate::{
     instance::Instance,
@@ -128,6 +129,12 @@ impl App {
         }
         self.submit();
     }
+    fn open_config_directory(&mut self, ctx: &egui::Context) {
+        if let Err(error) = desktop::open_directory(self.store.root()) {
+            self.error = error.to_string();
+            self.open(ctx);
+        }
+    }
     fn submit(&self) {
         let _ = self.worker.tx.send(Command::Update(
             self.config.current.clone(),
@@ -153,6 +160,8 @@ impl App {
                 crate::events::Event::Menu(event) => {
                     if event.id == self.desktop.open_item.id() {
                         self.open(ctx);
+                    } else if event.id == self.desktop.config_directory_item.id() {
+                        self.open_config_directory(ctx);
                     } else if event.id == self.desktop.toggle_item.id() && !self.locked {
                         self.config.visible = !self.config.visible;
                         self.changed();
@@ -268,6 +277,13 @@ impl eframe::App for App {
                     self.request_exit(ctx, false);
                 }
             });
+            if ui
+                .button("打开配置文件目录")
+                .on_hover_text(self.store.root().display().to_string())
+                .clicked()
+            {
+                self.open_config_directory(ctx);
+            }
             if self.locked {
                 ui.small("已锁定：暂停后台检查和显隐热键；RTSS 重启或倍率变化后请解锁。");
             }
@@ -285,6 +301,9 @@ impl eframe::App for App {
                     ui.separator();
                     if let Some(error) = self.preview.draw(ui, &self.config.current, &self.store) {
                         self.error = error;
+                    }
+                    if self.config.current.kind == crate::model::Kind::Hunt {
+                        hunt_help::show(ui, self.config.current.hunt_weapon);
                     }
                     ui.separator();
                     ui.horizontal(|ui| {
@@ -340,10 +359,7 @@ fn status_text(status: WorkerStatus) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        model::{Crosshair, Shape},
-        render,
-    };
+    use crate::model::{Crosshair, Shape};
     use std::{
         sync::{
             Arc,
@@ -361,18 +377,24 @@ mod tests {
     #[ignore = "manual screenshot QA; opens the editor with isolated data and RTSS mappings"]
     fn capture_preset_controls() {
         use winit::platform::windows::EventLoopBuilderExtWindows;
-        const PRESETS: [(Shape, &str, f32); 6] = [
+        const PRESETS: [(Shape, &str, f32); 11] = [
             (Shape::Cross, "cross", 10.),
             (Shape::Dot, "dot", 10.),
             (Shape::Square, "square", 10.),
             (Shape::Quadrant, "quadrant", 14.),
             (Shape::Quadrant, "quadrant-short", 6.),
             (Shape::Ring, "ring", 10.),
+            (Shape::Cross, "hunt-crossbow", 1.),
+            (Shape::Cross, "hunt-bow", 1.),
+            (Shape::Cross, "hunt-bow-220", 2.20),
+            (Shape::Cross, "hunt-sniper", 1.),
+            (Shape::Cross, "hunt-sniper-220", 2.20),
         ];
         struct CaptureApp {
             app: App,
             output: std::path::PathBuf,
             index: usize,
+            help_only: bool,
             frames: u8,
             requested: bool,
             deadline: Instant,
@@ -383,7 +405,13 @@ mod tests {
                     Instant::now() < self.deadline,
                     "screenshot capture timed out"
                 );
-                self.app.update(ctx, frame);
+                if self.help_only {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        hunt_help::show(ui, self.app.config.current.hunt_weapon);
+                    });
+                } else {
+                    self.app.update(ctx, frame);
+                }
                 let screenshot = ctx.input(|input| {
                     input.events.iter().find_map(|event| {
                         if let egui::Event::Screenshot { image, .. } = event {
@@ -394,18 +422,32 @@ mod tests {
                     })
                 });
                 if let Some(image) = screenshot {
-                    render::preset(&self.app.config.current)
+                    if !self.help_only {
+                        crate::output::raster(&self.app.config.current, &self.app.store)
+                            .unwrap()
+                            .save(
+                                self.output
+                                    .join(format!("{}-raster.png", PRESETS[self.index].1)),
+                            )
+                            .unwrap();
+                    }
+                    let rgba: Vec<u8> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
+                    let suffix = if self.help_only { "-help" } else { "" };
+                    image::RgbaImage::from_raw(image.width() as u32, image.height() as u32, rgba)
                         .unwrap()
                         .save(
                             self.output
-                                .join(format!("{}-raster.png", PRESETS[self.index].1)),
+                                .join(format!("{}{suffix}.png", PRESETS[self.index].1)),
                         )
                         .unwrap();
-                    let rgba: Vec<u8> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
-                    image::RgbaImage::from_raw(image.width() as u32, image.height() as u32, rgba)
-                        .unwrap()
-                        .save(self.output.join(format!("{}.png", PRESETS[self.index].1)))
-                        .unwrap();
+                    if matches!(self.index, 6 | 7 | 9) && !self.help_only {
+                        self.help_only = true;
+                        self.frames = 0;
+                        self.requested = false;
+                        ctx.request_repaint();
+                        return;
+                    }
+                    self.help_only = false;
                     self.index += 1;
                     if self.index == PRESETS.len() {
                         self.app.request_exit(ctx, false);
@@ -423,6 +465,18 @@ mod tests {
                     } else {
                         1.
                     };
+                    if self.index >= 6 {
+                        self.app.config.switch_kind(crate::model::Kind::Hunt);
+                        self.app.config.switch_weapon(if self.index == 6 {
+                            crate::model::HuntWeapon::Crossbow
+                        } else if self.index >= 9 {
+                            crate::model::HuntWeapon::SniperCrossbow
+                        } else {
+                            crate::model::HuntWeapon::Bow
+                        });
+                        self.app.config.current.image_scale = PRESETS[self.index].2;
+                        self.app.preview.zoom = 1.;
+                    }
                     self.frames = 0;
                     self.requested = false;
                 }
@@ -473,6 +527,7 @@ mod tests {
                     app: App::new_with_worker(cc, store, instance, Worker::start_mock),
                     output,
                     index: 0,
+                    help_only: false,
                     frames: 0,
                     requested: false,
                     deadline: Instant::now() + Duration::from_secs(30),

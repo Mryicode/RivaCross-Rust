@@ -31,16 +31,34 @@ pub fn decode(data: &[u8], ext: &str, scale: f32) -> Result<RgbaImage> {
             options.fontdb_mut().load_system_fonts();
         }
         let tree = usvg::Tree::from_data(data, &options).context("SVG 解析失败（禁止外部资源）")?;
-        let w = (tree.size().width() * scale).round().max(1.) as u32;
-        let h = (tree.size().height() * scale).round().max(1.) as u32;
+        let full_w = (tree.size().width() * scale).round().max(1.) as u32;
+        let full_h = (tree.size().height() * scale).round().max(1.) as u32;
+        let sx = full_w as f32 / tree.size().width();
+        let sy = full_h as f32 / tree.size().height();
+        let (mut w, mut h) = (full_w, full_h);
+        let (mut trim_x, mut trim_y) = (0, 0);
+        if dimensions(w, h).is_err() {
+            // Large SVG canvases may contain mostly transparent margins. Bound
+            // allocation by the drawable layers (including stroke/filter bounds),
+            // keeping opposite trims equal so the canvas-center anchor survives.
+            let bounds = tree.root().abs_layer_bounding_box();
+            let symmetric_trim = |size: u32, start: f32, end: f32| {
+                start.floor().min(size as f32 - end.ceil()).max(0.) as u32
+            };
+            trim_x = symmetric_trim(w, bounds.left() * sx, bounds.right() * sx)
+                .min((w - 1) / 2)
+                .saturating_sub(2);
+            trim_y = symmetric_trim(h, bounds.top() * sy, bounds.bottom() * sy)
+                .min((h - 1) / 2)
+                .saturating_sub(2);
+            w -= 2 * trim_x;
+            h -= 2 * trim_y;
+        }
         dimensions(w, h)?;
         let mut pix = sk::Pixmap::new(w, h).context("图片内存分配失败")?;
         resvg::render(
             &tree,
-            sk::Transform::from_scale(
-                w as f32 / tree.size().width(),
-                h as f32 / tree.size().height(),
-            ),
+            sk::Transform::from_row(sx, 0., 0., sy, -(trim_x as f32), -(trim_y as f32)),
             &mut pix.as_mut(),
         );
         return straight(&pix);
@@ -98,6 +116,61 @@ pub(crate) fn straight(pix: &sk::Pixmap) -> Result<RgbaImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn redrawn_sniper_is_vector_only_with_individually_named_lines_and_fixed_anchor() {
+        let svg = std::str::from_utf8(crate::model::HuntWeapon::SniperCrossbow.svg()).unwrap();
+        let doc = roxmltree::Document::parse(svg).unwrap();
+        let root = doc.root_element();
+        assert_eq!(root.attribute("viewBox"), Some("-200 -200 400 400"));
+        assert!(!doc.descendants().any(|n| n.has_tag_name("image")));
+        let lines: Vec<_> = doc
+            .descendants()
+            .filter(|n| n.has_tag_name("path"))
+            .collect();
+        assert_eq!(lines.len(), 19);
+        for line in &lines {
+            assert!(line.attribute("id").is_some());
+            assert!(line.children().any(|n| n.has_tag_name("title")));
+        }
+        let mut ids: Vec<_> = lines.iter().map(|n| n.attribute("id").unwrap()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), lines.len());
+        for scale in [1., 1.57, 2.20] {
+            let img = decode(svg.as_bytes(), "svg", scale).unwrap();
+            let cx = img.width() / 2;
+            let cy = img.height() / 2;
+            assert!(img.get_pixel(cx, (cy as f32 + 63. * scale).round() as u32)[3] > 0);
+            assert!(img.get_pixel(cx, (cy as f32 + 148. * scale).round() as u32)[3] > 0);
+            assert_eq!(
+                img.get_pixel(cx, (cy as f32 + 30. * scale).round() as u32)[3],
+                0
+            );
+        }
+    }
+    #[test]
+    fn sniper_svg_crops_large_transparent_canvas_before_allocation_without_rescaling() {
+        let data = include_bytes!("../assets/reference/sniper-crossbow-original.svg");
+        let original = decode(data, "svg", 1.).unwrap();
+        assert_eq!(original.dimensions(), (604, 604));
+        let normalized = std::str::from_utf8(data).unwrap().replacen(
+            "width=\"2400\" height=\"2400\" viewBox=\"-1200 -1200 2400 2400\"",
+            "width=\"604\" height=\"604\" viewBox=\"-302 -302 604 604\"",
+            1,
+        );
+        assert_eq!(original, decode(normalized.as_bytes(), "svg", 1.).unwrap());
+        for scale in [1.52, 1.56, 1.57, 1.58, 1.60, 2.20] {
+            let img = decode(data, "svg", scale).unwrap();
+            dimensions(img.width(), img.height()).unwrap();
+            assert!(img.pixels().any(|p| p[3] > 0));
+        }
+        assert!(decode(data, "svg", 16.).is_err());
+    }
+    #[test]
+    fn oversized_svg_with_real_content_still_obeys_pixel_and_edge_limits() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="2400"><rect width="2400" height="2400" fill="red"/></svg>"#;
+        assert!(decode(svg, "svg", 1.).is_err());
+    }
     #[test]
     fn refuses_external_and_animated_svg() {
         for svg in [

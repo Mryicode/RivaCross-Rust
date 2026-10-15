@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     width="400" height="400" viewBox="-200 -200 400 400" fill="none">
+  <title>Hunt 狙击弩 · 可逐线编辑的矢量重绘</title>
+  <desc>参照 Steam Crosshair 创意工坊 Hunt:showdown_crossbow_sniper_steel&amp;slug_16:10 重绘，适用于 16:10。上方钢箭胸靶，下方霰弹箭胸靶。原画布瞄准锚点为 (0,0)，坐标保持原嵌图的像素尺度。每条标线为独立 path，无内嵌位图。原作：https://steamcommunity.com/sharedfiles/filedetails/?id=3316676875</desc>
+  <defs>
+    <!-- Outline is shared at group level; editing a line also updates its outline. -->
+    <filter id="line-outline" x="-50%" y="-75%" width="200%" height="250%" color-interpolation-filters="sRGB">
+      <feMorphology in="SourceAlpha" operator="dilate" radius="1" result="expanded"/>
+      <feFlood flood-color="#000000" flood-opacity="0.5" result="outline-color"/>
+      <feComposite in="outline-color" in2="expanded" operator="in" result="outline"/>
+      <feMerge><feMergeNode in="outline"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g id="aim-point" inkscape:label="瞄准点" opacity="0.7" filter="url(#line-outline)" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">
+    <title>瞄准点</title>
+    <path id="aim-chevron" inkscape:label="瞄准三角" d="M -2 -1 L 0 -3 L 2 -1 Z" fill="#FFFFFF" stroke="none"><title>瞄准三角</title></path>
+  </g>
+  <g id="steel-chest" inkscape:label="钢箭胸靶" opacity="0.7" filter="url(#line-outline)" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">
+    <title>钢箭胸靶</title>
+    <path id="steel-left-contour" inkscape:label="左侧轮廓" d="M -20 48 Q -12 64 -9 80 Q -7 96 -7 110"><title>左侧轮廓</title></path>
+    <path id="steel-right-contour" inkscape:label="右侧轮廓" d="M 20 48 Q 12 64 9 80 Q 7 96 7 110"><title>右侧轮廓</title></path>
+    <path id="steel-top" inkscape:label="顶部横线" d="M -20 48 H 20"><title>顶部横线</title></path>
+    <path id="steel-upper-bar" inkscape:label="上方横线" d="M -14.5 63 H 14.5"><title>上方横线</title></path>
+    <path id="steel-lower-bar" inkscape:label="下方横线" d="M -9 80 H 9"><title>下方横线</title></path>
+    <path id="steel-bottom" inkscape:label="底部横线" d="M -7 110 H 7"><title>底部横线</title></path>
+    <path id="steel-center-line" inkscape:label="中央竖线" d="M 0 48 V 110"><title>中央竖线</title></path>
+  </g>
+  <g id="slug-chest" inkscape:label="霰弹箭胸靶" opacity="0.7" filter="url(#line-outline)" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">
+    <title>霰弹箭胸靶</title>
+    <path id="slug-left-contour" inkscape:label="左侧轮廓" d="M -27 121 L -16 176"><title>左侧轮廓</title></path>
+    <path id="slug-right-contour" inkscape:label="右侧轮廓" d="M 27 121 L 16 176"><title>右侧轮廓</title></path>
+    <path id="slug-top-left" inkscape:label="顶部左横线" d="M -27 121 H -19"><title>顶部左横线</title></path>
+    <path id="slug-top-right" inkscape:label="顶部右横线" d="M 19 121 H 27"><title>顶部右横线</title></path>
+    <path id="slug-middle-left" inkscape:label="中部左横线" d="M -21.6 148 H -10"><title>中部左横线</title></path>
+    <path id="slug-middle-right" inkscape:label="中部右横线" d="M 10 148 H 21.6"><title>中部右横线</title></path>
+    <path id="slug-bottom-left" inkscape:label="底部左横线" d="M -16 176 H -10"><title>底部左横线</title></path>
+    <path id="slug-bottom-right" inkscape:label="底部右横线" d="M 10 176 H 16"><title>底部右横线</title></path>
+    <path id="slug-center-top" inkscape:label="顶部中心标记" d="M -1 121 H 1"><title>顶部中心标记</title></path>
+    <path id="slug-center-middle" inkscape:label="中部中心标记" d="M -1 148 H 1"><title>中部中心标记</title></path>
+    <path id="slug-center-bottom" inkscape:label="底部中心标记" d="M -1 176 H 1"><title>底部中心标记</title></path>
+  </g>
+</svg>

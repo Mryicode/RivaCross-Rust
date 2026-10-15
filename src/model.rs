@@ -6,6 +6,29 @@ pub enum Kind {
     Preset,
     Image,
     Text,
+    Hunt,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum HuntWeapon {
+    Crossbow,
+    Bow,
+    SniperCrossbow,
+}
+impl HuntWeapon {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Crossbow => "十字弩",
+            Self::Bow => "弓",
+            Self::SniperCrossbow => "狙击弩",
+        }
+    }
+    pub fn svg(self) -> &'static [u8] {
+        match self {
+            Self::Crossbow => include_bytes!("../assets/crossbow.svg"),
+            Self::Bow => include_bytes!("../assets/bow.svg"),
+            Self::SniperCrossbow => include_bytes!("../assets/sniper-crossbow.svg"),
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Shape {
@@ -32,6 +55,7 @@ impl Shape {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Crosshair {
     pub kind: Kind,
+    pub hunt_weapon: HuntWeapon,
     pub shape: Shape,
     pub color: [u8; 3],
     pub opacity: u8,
@@ -55,6 +79,7 @@ impl Default for Crosshair {
     fn default() -> Self {
         Self {
             kind: Kind::Preset,
+            hunt_weapon: HuntWeapon::Crossbow,
             shape: Shape::Cross,
             color: [0, 255, 0],
             opacity: 255,
@@ -130,6 +155,7 @@ pub struct ModeSettings {
     pub preset: Crosshair,
     pub image: Crosshair,
     pub text: Crosshair,
+    pub hunt: Crosshair,
 }
 impl Default for ModeSettings {
     fn default() -> Self {
@@ -137,6 +163,10 @@ impl Default for ModeSettings {
             preset: Crosshair::default(),
             image: Crosshair {
                 kind: Kind::Image,
+                ..Default::default()
+            },
+            hunt: Crosshair {
+                kind: Kind::Hunt,
                 ..Default::default()
             },
             text: Crosshair {
@@ -152,6 +182,7 @@ impl ModeSettings {
             Kind::Preset => &mut self.preset,
             Kind::Image => &mut self.image,
             Kind::Text => &mut self.text,
+            Kind::Hunt => &mut self.hunt,
         }
     }
     fn validate(&self) -> Result<()> {
@@ -159,6 +190,7 @@ impl ModeSettings {
             (&self.preset, Kind::Preset),
             (&self.image, Kind::Image),
             (&self.text, Kind::Text),
+            (&self.hunt, Kind::Hunt),
         ] {
             ensure!(c.kind == kind, "模式设置类型不匹配");
             c.validate()?;
@@ -217,11 +249,64 @@ impl PresetSettings {
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HuntSettings {
+    pub crossbow: Crosshair,
+    pub bow: Crosshair,
+    // Only this newly added weapon defaults in existing complete version 3 files.
+    #[serde(default = "default_sniper_crossbow")]
+    pub sniper_crossbow: Crosshair,
+}
+fn default_sniper_crossbow() -> Crosshair {
+    Crosshair {
+        kind: Kind::Hunt,
+        hunt_weapon: HuntWeapon::SniperCrossbow,
+        ..Default::default()
+    }
+}
+impl Default for HuntSettings {
+    fn default() -> Self {
+        let weapon = |hunt_weapon| Crosshair {
+            kind: Kind::Hunt,
+            hunt_weapon,
+            ..Default::default()
+        };
+        Self {
+            crossbow: weapon(HuntWeapon::Crossbow),
+            bow: weapon(HuntWeapon::Bow),
+            sniper_crossbow: default_sniper_crossbow(),
+        }
+    }
+}
+impl HuntSettings {
+    fn get_mut(&mut self, weapon: HuntWeapon) -> &mut Crosshair {
+        match weapon {
+            HuntWeapon::Crossbow => &mut self.crossbow,
+            HuntWeapon::Bow => &mut self.bow,
+            HuntWeapon::SniperCrossbow => &mut self.sniper_crossbow,
+        }
+    }
+    fn validate(&self) -> Result<()> {
+        for (c, weapon) in [
+            (&self.crossbow, HuntWeapon::Crossbow),
+            (&self.bow, HuntWeapon::Bow),
+            (&self.sniper_crossbow, HuntWeapon::SniperCrossbow),
+        ] {
+            ensure!(
+                c.kind == Kind::Hunt && c.hunt_weapon == weapon,
+                "Hunt 武器设置类型不匹配"
+            );
+            c.validate()?;
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub version: u32,
     pub current: Crosshair,
     pub mode_settings: ModeSettings,
     pub preset_settings: PresetSettings,
+    pub hunt_settings: HuntSettings,
     pub visible: bool,
     pub hotkey: String,
     pub schemes: Vec<Scheme>,
@@ -229,10 +314,11 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            version: 2,
+            version: 3,
             current: Crosshair::default(),
             mode_settings: ModeSettings::default(),
             preset_settings: PresetSettings::default(),
+            hunt_settings: HuntSettings::default(),
             visible: true,
             hotkey: "Ctrl+Alt+F9".into(),
             schemes: vec![],
@@ -242,9 +328,20 @@ impl Default for Config {
 impl Config {
     pub fn remember_current(&mut self) {
         *self.mode_settings.get_mut(self.current.kind) = self.current.clone();
+        if self.current.kind == Kind::Hunt {
+            *self.hunt_settings.get_mut(self.current.hunt_weapon) = self.current.clone();
+        }
         if self.current.kind == Kind::Preset {
             *self.preset_settings.get_mut(self.current.shape) = self.current.clone();
         }
+    }
+    pub fn switch_weapon(&mut self, weapon: HuntWeapon) {
+        if self.current.kind != Kind::Hunt || self.current.hunt_weapon == weapon {
+            return;
+        }
+        self.remember_current();
+        self.current = self.hunt_settings.get_mut(weapon).clone();
+        self.remember_current();
     }
     pub fn switch_shape(&mut self, shape: Shape) {
         if self.current.kind != Kind::Preset || self.current.shape == shape {
@@ -269,6 +366,7 @@ impl Config {
     pub fn reset_current(&mut self) {
         self.apply_crosshair(Crosshair {
             kind: self.current.kind,
+            hunt_weapon: self.current.hunt_weapon,
             shape: if self.current.kind == Kind::Preset {
                 self.current.shape
             } else {
@@ -278,10 +376,14 @@ impl Config {
         });
     }
     pub fn validate(&self) -> Result<()> {
-        ensure!(self.version == 2, "不支持此配置版本");
+        ensure!(
+            self.version == 3,
+            "不支持此配置版本；需要版本 3，请重置或手动处理旧配置"
+        );
         self.current.validate()?;
         self.mode_settings.validate()?;
         self.preset_settings.validate()?;
+        self.hunt_settings.validate()?;
         ensure!(self.schemes.len() <= 100, "方案过多");
         for s in &self.schemes {
             ensure!(
@@ -297,6 +399,101 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn all_hunt_weapons_keep_independent_settings_and_sniper_reset_is_isolated() {
+        let mut c = Config::default();
+        c.switch_kind(Kind::Hunt);
+        let mut saved = Vec::new();
+        for (index, weapon) in [
+            HuntWeapon::Crossbow,
+            HuntWeapon::Bow,
+            HuntWeapon::SniperCrossbow,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            c.switch_weapon(weapon);
+            c.current.image_scale = 1. + index as f32 * 0.5;
+            c.current.opacity = 80 + index as u8 * 50;
+            c.current.x = index as i32 * 10;
+            c.current.y = -(index as i32) * 5;
+            c.current.rtss_zoom = index as u32 + 1;
+            saved.push(c.current.clone());
+        }
+        c.switch_kind(Kind::Text);
+        c.switch_kind(Kind::Hunt);
+        assert_eq!(c.current, saved[2]);
+        c.reset_current();
+        assert_eq!(c.current, default_sniper_crossbow());
+        for expected in &saved {
+            c.apply_crosshair(expected.clone());
+            assert_eq!(&c.current, expected);
+        }
+        for expected in &saved {
+            c.switch_weapon(expected.hunt_weapon);
+            assert_eq!(&c.current, expected);
+        }
+        c.hunt_settings.sniper_crossbow.image_scale = f32::NAN;
+        assert!(c.validate().is_err());
+        c.hunt_settings.sniper_crossbow = default_sniper_crossbow();
+        c.hunt_settings.sniper_crossbow.hunt_weapon = HuntWeapon::Bow;
+        assert!(c.validate().is_err());
+    }
+    #[test]
+    fn hunt_weapons_restore_and_reset_only_the_selected_weapon() {
+        let mut c = Config::default();
+        c.current.x = 42;
+        let preset = c.current.clone();
+        c.switch_kind(Kind::Hunt);
+        assert_eq!(c.current.hunt_weapon, HuntWeapon::Crossbow);
+        c.current.image_scale = 1.57;
+        c.current.opacity = 128;
+        c.current.x = -20;
+        c.current.y = 15;
+        c.current.rtss_zoom = 3;
+        let crossbow = c.current.clone();
+        c.switch_weapon(HuntWeapon::Bow);
+        assert_eq!(c.current.image_scale, 1.);
+        c.current.image_scale = 2.20;
+        c.current.opacity = 80;
+        c.current.x = 12;
+        c.current.rtss_zoom = 4;
+        let bow = c.current.clone();
+        c.switch_kind(Kind::Image);
+        c.switch_kind(Kind::Hunt);
+        assert_eq!(c.current, bow);
+        c.switch_weapon(HuntWeapon::Crossbow);
+        assert_eq!(c.current, crossbow);
+        c.apply_crosshair(bow.clone());
+        c.reset_current();
+        assert_eq!(
+            c.current,
+            Crosshair {
+                kind: Kind::Hunt,
+                hunt_weapon: HuntWeapon::Bow,
+                ..Default::default()
+            }
+        );
+        c.switch_weapon(HuntWeapon::Crossbow);
+        assert_eq!(c.current, crossbow);
+        c.switch_kind(Kind::Preset);
+        assert_eq!(c.current, preset);
+        c.apply_crosshair(bow.clone());
+        assert_eq!(c.current, bow);
+        c.validate().unwrap();
+    }
+    #[test]
+    fn inactive_hunt_values_and_weapon_identity_are_validated() {
+        let mut c = Config::default();
+        c.hunt_settings.bow.image_scale = f32::NAN;
+        assert!(c.validate().is_err());
+        c.hunt_settings.bow.image_scale = 1.;
+        c.hunt_settings.bow.hunt_weapon = HuntWeapon::Crossbow;
+        assert!(c.validate().is_err());
+        c.hunt_settings = HuntSettings::default();
+        c.mode_settings.hunt.kind = Kind::Image;
+        assert!(c.validate().is_err());
+    }
     #[test]
     fn preset_shapes_restore_complete_settings_without_inheriting_edits() {
         let mut c = Config::default();
