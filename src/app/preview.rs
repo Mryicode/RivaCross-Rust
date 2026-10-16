@@ -36,10 +36,10 @@ impl Preview {
             if c.kind != Kind::Text {
                 match crate::output::raster(c, store) {
                     Ok(img) => {
-                        let color = egui::ColorImage::from_rgba_unmultiplied(
-                            [img.width() as usize, img.height() as usize],
-                            img.as_raw(),
-                        );
+                        let color = egui::ColorImage {
+                            size: [img.width() as usize, img.height() as usize],
+                            pixels: img.pixels().map(|p| preview_color(p.0)).collect(),
+                        };
                         self.texture = Some(ui.ctx().load_texture(
                             "crosshair",
                             color,
@@ -94,13 +94,19 @@ impl Preview {
                 egui::Align2::CENTER_CENTER,
                 &c.text,
                 egui::FontId::monospace(16. * c.text_size as f32 / 100.),
-                Color32::from_rgba_unmultiplied(r, g, b, c.opacity),
+                preview_color([r, g, b, c.opacity]),
             );
             ui.label("字符预览仅供参考，实际外观以 RTSS 为准。");
         }
         ui.label("预览居中展示外观；偏移只作用于 RTSS 输出。");
         error
     }
+}
+// RTSS blends in gamma space. egui's unmultiplied constructor multiplies in
+// linear space, which makes translucent white lines look too bright here.
+fn preview_color([r, g, b, a]: [u8; 4]) -> Color32 {
+    let multiply = |v| (u16::from(v) * u16::from(a) / 255) as u8;
+    Color32::from_rgba_premultiplied(multiply(r), multiply(g), multiply(b), a)
 }
 fn appearance(c: &Crosshair) -> Crosshair {
     let mut c = c.clone();
@@ -113,6 +119,18 @@ fn appearance(c: &Crosshair) -> Crosshair {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preview_uses_rtss_gamma_space_alpha() {
+        assert_eq!(
+            preview_color([255, 128, 64, 128]).to_array(),
+            [128, 64, 32, 128]
+        );
+        assert_eq!(preview_color([255, 128, 64, 0]), Color32::TRANSPARENT);
+        assert_eq!(
+            preview_color([255, 128, 64, 255]).to_array(),
+            [255, 128, 64, 255]
+        );
+    }
     #[test]
     fn offsets_and_compensation_do_not_invalidate_preview_texture() {
         let before = Crosshair::default();

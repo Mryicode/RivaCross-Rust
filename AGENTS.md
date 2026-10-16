@@ -43,7 +43,7 @@ Use concise, imperative commit subjects such as `Fix hidden-window event handlin
 
 ## Configuration & Integration Boundaries
 
-The current application version, 0.1.0, is the initial release; no earlier Rust versions have been published. Configuration format version 3 is an internal schema identifier, not a release number. Public documentation should describe first-run defaults and reset behavior without presenting development schema changes as released upgrade history.
+The current application version is 0.1.1, which fixes semi-transparent RTSS output and preview consistency. Configuration format version 3 is an internal schema identifier, not a release number. Public documentation should describe first-run defaults and reset behavior without presenting development schema changes as released upgrade history.
 
 User data lives under `%LOCALAPPDATA%\RivaCross`. Preserve atomic configuration saves, image-import validation, and ownership checks for RTSS slots. Do not modify RTSS configuration or other clients' overlays. Keep the development-only `ui-capture` feature disabled in release packages.
 

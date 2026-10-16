@@ -223,9 +223,148 @@ pub fn texture(img: &RgbaImage, zoom: u32) -> Result<RgbaImage> {
     );
     Ok(texture)
 }
+
+pub struct AlphaTile {
+    pub source_x: u32,
+    pub source_y: u32,
+    pub atlas_x: u32,
+    pub atlas_y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub alpha: u8,
+}
+
+/// RTSS 7.3.7 premultiplies PNG RGB while loading, then uses straight-alpha
+/// blending. Binary PNG masks and per-layer color alpha avoid that second
+/// multiplication without changing the source pixels or their screen positions.
+pub fn alpha_texture(source: &RgbaImage, zoom: u32) -> Result<(RgbaImage, Vec<AlphaTile>)> {
+    anyhow::ensure!((1..=16).contains(&zoom), "倍率无效");
+    anyhow::ensure!(
+        source.width().is_multiple_of(2 * zoom) && source.height().is_multiple_of(2 * zoom),
+        "图片尺寸与倍率不匹配"
+    );
+    let tile = 128 / (2 * zoom) * (2 * zoom);
+    let mut tiles = Vec::new();
+    for sy in (0..source.height()).step_by(tile as usize) {
+        for sx in (0..source.width()).step_by(tile as usize) {
+            let width = tile.min(source.width() - sx);
+            let height = tile.min(source.height() - sy);
+            let mut bounds = [None::<(u32, u32, u32, u32)>; 256];
+            for y in sy..sy + height {
+                for x in sx..sx + width {
+                    let alpha = source.get_pixel(x, y)[3] as usize;
+                    let b = bounds[alpha].get_or_insert((x, y, x, y));
+                    b.0 = b.0.min(x);
+                    b.1 = b.1.min(y);
+                    b.2 = b.2.max(x);
+                    b.3 = b.3.max(y);
+                }
+            }
+            for alpha in 1..=255u8 {
+                if let Some((x0, y0, x1, y1)) = bounds[alpha as usize] {
+                    // Bound both PNG allocation (at most 1024 x 4096) and
+                    // hypertext length, including the 32 KB RTSS slot limit.
+                    anyhow::ensure!(
+                        tiles.len() < 512,
+                        "图片半透明细节过多，超出 RTSS 输出容量；请缩小图片或简化透明度"
+                    );
+                    let q = 2 * zoom;
+                    let x0 = x0 / q * q;
+                    let y0 = y0 / q * q;
+                    tiles.push(AlphaTile {
+                        source_x: x0,
+                        source_y: y0,
+                        atlas_x: 0,
+                        atlas_y: 0,
+                        width: (x1 + 1).div_ceil(q) * q - x0,
+                        height: (y1 + 1).div_ceil(q) * q - y0,
+                        alpha,
+                    });
+                }
+            }
+        }
+    }
+    tiles.sort_by_key(|t| std::cmp::Reverse(t.height));
+    let (mut x, mut y, mut row_height, mut atlas_width) = (0, 0, 0, 1);
+    for t in &mut tiles {
+        if x + t.width > 1024 {
+            x = 0;
+            y += row_height;
+            row_height = 0;
+        }
+        t.atlas_x = x;
+        t.atlas_y = y;
+        x += t.width;
+        row_height = row_height.max(t.height);
+        atlas_width = atlas_width.max(x);
+    }
+    anyhow::ensure!(y + row_height <= 4096, "图片透明度纹理超出 RTSS 输出容量");
+    // RTSS's PNG texture path needs a full 256-pixel allocation quantum on
+    // both axes; short packed images otherwise produce corrupted UV samples.
+    let mut atlas = RgbaImage::new(
+        atlas_width.max(256).div_ceil(256) * 256,
+        (y + row_height).max(256).div_ceil(256) * 256,
+    );
+    for t in &tiles {
+        for y in 0..t.height {
+            for x in 0..t.width {
+                let p = source.get_pixel(t.source_x + x, t.source_y + y);
+                if p[3] == t.alpha {
+                    atlas.put_pixel(
+                        t.atlas_x + x,
+                        t.atlas_y + y,
+                        image::Rgba([p[0], p[1], p[2], 255]),
+                    );
+                }
+            }
+        }
+    }
+    Ok((atlas, tiles))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn alpha_masks_reconstruct_every_alpha_once_without_color_or_anchor_changes() {
+        let mut img = RgbaImage::new(256, 2);
+        for x in 0..256 {
+            img.put_pixel(x, 0, image::Rgba([255, 80, 160, x as u8]));
+        }
+        for zoom in [1, 2, 3, 4, 16] {
+            let expected = texture(&img, zoom).unwrap();
+            let (atlas, tiles) = alpha_texture(&expected, zoom).unwrap();
+            assert!(atlas.pixels().all(|p| p[3] == 0 || p[3] == 255));
+            let mut actual = RgbaImage::new(expected.width(), expected.height());
+            for t in tiles {
+                assert!(t.width <= 128 && t.height <= 128);
+                assert!(t.width.is_multiple_of(2 * zoom) && t.height.is_multiple_of(2 * zoom));
+                for y in 0..t.height {
+                    for x in 0..t.width {
+                        let p = atlas.get_pixel(t.atlas_x + x, t.atlas_y + y);
+                        if p[3] == 255 {
+                            let dst = actual.get_pixel_mut(t.source_x + x, t.source_y + y);
+                            assert_eq!(dst[3], 0, "no pixel may be drawn twice");
+                            *dst = image::Rgba([p[0], p[1], p[2], t.alpha]);
+                        }
+                    }
+                }
+            }
+            for (a, b) in actual.pixels().zip(expected.pixels()) {
+                assert_eq!(a[3], b[3]);
+                if a[3] != 0 {
+                    assert_eq!(a, b);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn alpha_mask_allocation_is_bounded_for_dense_transparency() {
+        let img = RgbaImage::from_fn(256, 256, |x, y| {
+            image::Rgba([255, 255, 255, ((x + y) % 255 + 1) as u8])
+        });
+        assert!(alpha_texture(&img, 1).is_err());
+    }
     #[test]
     fn symmetric_crop_keeps_asymmetric_art_and_faint_edge_at_original_anchor() {
         let mut img = RgbaImage::new(101, 103);

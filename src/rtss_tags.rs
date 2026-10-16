@@ -1,6 +1,46 @@
 use crate::model::{Crosshair, Kind};
 use anyhow::{Context, Result, ensure};
 
+pub fn alpha_tags(
+    c: &Crosshair,
+    zoom: u32,
+    path: &str,
+    size: (u32, u32),
+    tiles: &[crate::render::AlphaTile],
+) -> Result<String> {
+    c.validate()?;
+    ensure!((1..=16).contains(&zoom), "倍率无效");
+    ensure!(!path.contains(['\"', '<', '>']), "缓存路径含 RTSS 保留字符");
+    let mut result = format!("<LI=\"{path}\"><S=1>");
+    let mut sorted: Vec<_> = tiles.iter().collect();
+    sorted.sort_by_key(|t| t.alpha);
+    let mut alpha = None;
+    for (layer, t) in sorted.into_iter().enumerate() {
+        let dx = c.x + (t.source_x as i32 + t.width as i32 / 2 - size.0 as i32 / 2) / zoom as i32;
+        let dy = c.y + (t.source_y as i32 + t.height as i32 / 2 - size.1 as i32 / 2) / zoom as i32;
+        use std::fmt::Write;
+        if alpha != Some(t.alpha) {
+            write!(result, "<C={:02X}FFFFFF>", t.alpha)?;
+            alpha = Some(t.alpha);
+        }
+        write!(
+            result,
+            "<P4><L{layer}><E={},{},4><M={dx},{dy},0,0><I={},{},{},{},{},{}>",
+            t.width / zoom,
+            t.height / zoom,
+            t.width / zoom,
+            t.height / zoom,
+            t.atlas_x,
+            t.atlas_y,
+            t.width,
+            t.height
+        )?;
+    }
+    result.push_str("<C><S>");
+    ensure!(result.len() < 32768, "RTSS 输出内容过长");
+    Ok(result)
+}
+
 pub fn tags(c: &Crosshair, zoom: u32, image: Option<(&str, u32, u32)>) -> Result<String> {
     c.validate()?;
     ensure!((1..=16).contains(&zoom), "倍率无效");
@@ -55,6 +95,53 @@ pub fn tags(c: &Crosshair, zoom: u32, image: Option<(&str, u32, u32)>) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn alpha_atlas_rectangles_keep_native_pixel_positions_and_layer_opacity() {
+        let img = image::RgbaImage::from_fn(256, 256, |x, y| {
+            if (100..110).contains(&x) && (130..150).contains(&y) {
+                image::Rgba([255, 80, 160, 128])
+            } else {
+                image::Rgba([0; 4])
+            }
+        });
+        let c = Crosshair {
+            x: 12,
+            y: -6,
+            ..Default::default()
+        };
+        for zoom in [1, 2, 3, 4, 16] {
+            let source = crate::render::texture(&img, zoom).unwrap();
+            let (_, tiles) = crate::render::alpha_texture(&source, zoom).unwrap();
+            let tag = alpha_tags(&c, zoom, "test.png", source.dimensions(), &tiles).unwrap();
+            assert!(tag.contains("<C=80FFFFFF>"));
+            assert!(tag.len() < 32768);
+            for t in tiles {
+                let dx = c.x
+                    + (t.source_x as i32 + t.width as i32 / 2 - source.width() as i32 / 2)
+                        / zoom as i32;
+                let dy = c.y
+                    + (t.source_y as i32 + t.height as i32 / 2 - source.height() as i32 / 2)
+                        / zoom as i32;
+                assert!(tag.contains(&format!(
+                    "<M={dx},{dy},0,0><I={},{},{},{},{},{}>",
+                    t.width / zoom,
+                    t.height / zoom,
+                    t.atlas_x,
+                    t.atlas_y,
+                    t.width,
+                    t.height
+                )));
+                assert_eq!(
+                    dx * zoom as i32 - t.width as i32 / 2,
+                    c.x * zoom as i32 + t.source_x as i32 - source.width() as i32 / 2
+                );
+                assert_eq!(
+                    dy * zoom as i32 - t.height as i32 / 2,
+                    c.y * zoom as i32 + t.source_y as i32 - source.height() as i32 / 2
+                );
+            }
+        }
+    }
     #[test]
     fn tiled_output_covers_every_pixel_once_with_native_scale_and_bounded_layers() {
         for zoom in [1, 2, 3, 4, 16] {

@@ -4,7 +4,7 @@
 
 A lightweight crosshair editor for Windows x64, built with Rust and egui/eframe. It displays custom crosshairs through RivaTuner Statistics Server (RTSS).
 
-The initial release is **0.1.0**.
+Current version: **0.1.1**. This update fixes darkened semi-transparent crosshairs in RTSS and aligns preview opacity with the actual output.
 
 Inspired by [irseny/RivaCross](https://github.com/irseny/RivaCross) ([releases](https://github.com/irseny/RivaCross/releases)) and its use of RTSS to display a crosshair. This project brings that idea to a graphical Rust editor with a focus on low background resource use.
 
@@ -64,6 +64,7 @@ The hotkey works only while the editor is running. After RTSS or Windows restart
 - Set **RTSS zoom compensation = 0** to read the global OSD zoom automatically, with a fallback of 1× if the query fails. If the target application uses a separate RTSS profile, enter its zoom manually. RivaCross does not change RTSS configuration.
 - PNG enlargement uses nearest-neighbor sampling. SVG scales from its source geometry. Text preview may differ from RTSS; large text remains limited by RTSS font texture quality.
 - Import static, self-contained PNG/SVG files up to 32 MiB. Decoded images can be at most 4096 pixels per edge and 4,194,304 pixels in total. Animated files and SVGs with external resources are rejected. Transparent SVG margins may be cropped before allocating pixels; visible content must still fit these limits.
+- Semi-transparent images use binary masks with RTSS layer opacity to preserve their colors. Output is limited to 512 masks and RTSS's 32 KiB text capacity; images with very complex transparency may need a smaller scale or simpler alpha values.
 - Hunt scale ranges from 0.01 to 16.00, within the image limits. The artwork keeps its colors and alpha; the opacity control multiplies the source alpha. The sniper-crossbow artwork is designed for **16:10**. **16:9 has not been calibrated**.
 - Text accepts 1 to 128 printable ASCII characters, excluding `<` and `>`. Chinese, emoji and line breaks are unsupported in text crosshairs.
 - Display support depends on RTSS and the target application. Compatibility with specific games and resolutions still needs testing. RivaCross has no automatic per-game switching or startup registration.

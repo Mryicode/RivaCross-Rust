@@ -35,6 +35,16 @@ pub fn tags(c: &Crosshair, store: &Store, zoom: u32) -> Result<(String, Option<R
     }
     let img = raster(c, store)?;
     let texture = render::texture(&img, zoom)?;
+    if img.pixels().any(|p| p[3] > 0 && p[3] < 255) {
+        let size = texture.dimensions();
+        let (atlas, tiles) = render::alpha_texture(&texture, zoom)?;
+        let path = store.write_cache(&atlas)?;
+        let path = path.to_str().context("缓存路径无法编码")?;
+        return Ok((
+            rtss_tags::alpha_tags(c, zoom, path, size, &tiles)?,
+            Some(img),
+        ));
+    }
     let path = store.write_cache(&texture)?;
     let path = path.to_str().context("缓存路径无法编码")?;
     Ok((
@@ -45,6 +55,83 @@ pub fn tags(c: &Crosshair, store: &Store, zoom: u32) -> Result<(String, Option<R
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "exports production alpha output for the local RTSS readback driver"]
+    fn export_alpha_comparison() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("RIVACROSS_ALPHA_QA_DIR").expect("QA directory"),
+        );
+        let store = Store::at(root.join("data")).unwrap();
+        let name = store.import(&root.join("rgba.png")).unwrap();
+        let cases = [
+            (
+                "colors",
+                Crosshair {
+                    kind: Kind::Image,
+                    image: Some(name),
+                    ..Default::default()
+                },
+            ),
+            (
+                "bow",
+                Crosshair {
+                    kind: Kind::Hunt,
+                    hunt_weapon: crate::model::HuntWeapon::Bow,
+                    image_scale: 1.57,
+                    ..Default::default()
+                },
+            ),
+        ];
+        for (name, c) in cases {
+            let img = raster(&c, &store).unwrap();
+            let texture = render::texture(&img, 2).unwrap();
+            texture
+                .save(root.join(format!("{name}-expected.png")))
+                .unwrap();
+            let old_path = store.write_cache(&texture).unwrap();
+            let old = rtss_tags::tags(
+                &c,
+                2,
+                Some((
+                    old_path.to_str().unwrap(),
+                    texture.width(),
+                    texture.height(),
+                )),
+            )
+            .unwrap();
+            let (new, _) = tags(&c, &store, 2).unwrap();
+            std::fs::write(root.join(format!("{name}-before.txt")), old).unwrap();
+            std::fs::write(root.join(format!("{name}-after.txt")), new).unwrap();
+        }
+    }
+
+    #[test]
+    fn every_hunt_weapon_generates_bounded_alpha_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::at(temp.path().into()).unwrap();
+        for hunt_weapon in [
+            crate::model::HuntWeapon::Crossbow,
+            crate::model::HuntWeapon::Bow,
+            crate::model::HuntWeapon::SniperCrossbow,
+        ] {
+            for image_scale in [1., 1.57, 2.20] {
+                for zoom in [1, 2, 3, 4] {
+                    let c = Crosshair {
+                        kind: Kind::Hunt,
+                        hunt_weapon,
+                        image_scale,
+                        opacity: 128,
+                        ..Default::default()
+                    };
+                    let (tag, preview) = tags(&c, &store, zoom).unwrap_or_else(|e| {
+                        panic!("{hunt_weapon:?} scale={image_scale} zoom={zoom}: {e}")
+                    });
+                    assert!(tag.len() < 32768);
+                    assert_eq!(preview.unwrap(), raster(&c, &store).unwrap());
+                }
+            }
+        }
+    }
     /// Run with scripts/verify-hunt-live.py. Uses only our own RTSS slot and
     /// refuses to start while an editor or a retained RivaCross overlay exists.
     #[test]
